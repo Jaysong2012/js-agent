@@ -1,0 +1,38 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: js-agent
+  
+logging:
+  level:
+    cn.apmen.jsagent: DEBUG
+    reactor.netty: INFO
+    org.springframework.web: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# Agent框架配置
+agent:
+  llm:
+    # 默认模型配置
+    default-model: "gpt-3.5-turbo"
+    default-temperature: 0.7
+    default-max-tokens: 2000
+    
+    # OpenAI API配置
+    openai:
+      base-url: "https://api.openai.com/v1"
+      api-key: "${OPENAI_API_KEY:your-api-key-here}"
+      timeout: 30s
+      
+  # 对话配置
+  conversation:
+    max-history: 10
+    default-max-rounds: 5
+    
+  # 工具配置
+  tools:
+    enabled: true
+    timeout: 10s
