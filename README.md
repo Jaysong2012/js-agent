@@ -20,7 +20,7 @@
 
 ## 构建项目
 
-\`\`\`bash
+```bash
 # 编译整个项目
 ./mvnw clean compile
 
@@ -29,11 +29,11 @@
 
 # 运行应用
 ./mvnw spring-boot:run -pl js-agent
-\`\`\`
+```
 
 ## 项目结构
 
-\`\`\`
+```
 js-agent/
 ├── pom.xml                           # 父模块POM
 ├── js-agent-framework/               # 框架模块
@@ -53,4 +53,4 @@ js-agent/
         │   │   └── cn/apmen/jsagent/
         │   └── resources/
         └── test/
-\`\`\`
+```
