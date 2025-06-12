@@ -25,7 +25,7 @@ agent:
     default-temperature: 0.7
     default-max-tokens: 2000
     
-    # OpenAI API配置
+    # OpenAI 统一API 配置
     openai:
       base-url: "you-openai-api-base-url"
       api-key: "you-api-key"

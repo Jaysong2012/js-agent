@@ -46,7 +46,8 @@ public class AgentResponse {
         TEXT,           // 文本响应
         TOOL_CALL,      // 工具调用
         ERROR,          // 错误
-        THINKING        // 思考中（流式响应的中间状态）
+        THINKING,       // 思考中（流式响应的中间状态）
+        DEBUG           // 调试信息
     }
 
     // 静态工厂方法
@@ -77,6 +78,14 @@ public class AgentResponse {
     public static AgentResponse thinking(String content) {
         return AgentResponse.builder()
                 .type(ResponseType.THINKING)
+                .content(content)
+                .isFinalResponse(false)
+                .build();
+    }
+
+    public static AgentResponse debug(String content) {
+        return AgentResponse.builder()
+                .type(ResponseType.DEBUG)
                 .content(content)
                 .isFinalResponse(false)
                 .build();

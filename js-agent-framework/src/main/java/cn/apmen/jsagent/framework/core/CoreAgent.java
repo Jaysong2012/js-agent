@@ -53,7 +53,7 @@ public class CoreAgent {
             // 构建ChatCompletionRequest
             ChatCompletionRequest request = buildChatRequest(runnerContext);
             request.setStream(true); // 设置流式参数
-            
+
             // 记录请求信息，但避免序列化整个request对象
             log.info("Starting stream request - model: {}, messages: {}, tools: {}", 
                 request.getModel(), 
@@ -99,9 +99,8 @@ public class CoreAgent {
                             if (completeMessage.getToolCalls() != null && !completeMessage.getToolCalls().isEmpty()) {
                                 return Flux.just(AgentResponse.toolCall(completeMessage.getToolCalls()));
                             } else {
-                                // 最终文本响应
                                 String content = completeMessage.getContent() != null ? completeMessage.getContent() : "";
-                                return Flux.just(AgentResponse.text(content, true));
+                                return Flux.just(AgentResponse.text("", true));
                             }
                         }
 

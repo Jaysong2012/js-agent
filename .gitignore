@@ -31,3 +31,12 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Mac ###
+.DS_Store
+
+### Others ###
+logs/
+
+### 临时屏蔽配置 ###
+application.yml

@@ -55,9 +55,16 @@ public class AgentRunner {
      */
     public Flux<AgentEvent> runStream(UserChatRequest request) {
         return Mono.fromCallable(() -> buildRunnerContext(request))
-                .flatMapMany(this::executeStreamLoop)
-                .map(this::convertToAgentEvent)
-                .doOnNext(event -> log.debug("Agent event generated: {}", event))
+                .flatMapMany(context -> {
+                    // 发送开始执行的调试事件
+                    return Flux.just(AgentEvent.debugInfo("开始执行Agent任务，用户ID: " + context.getUserId() +
+                                                        ", 会话ID: " + context.getConversationId()))
+                            .concatWith(executeStreamLoop(context)
+                                    .flatMap(this::convertToAgentEventStream));
+                })
+                .doOnNext(event -> log.debug("Agent event generated: type={}, content={}",
+                    event.getType(),
+                    event.getContent() != null ? event.getContent().substring(0, Math.min(50, event.getContent().length())) + "..." : "null"))
                 .onErrorMap(this::mapToAgentException)
                 .onErrorResume(throwable -> Flux.just(createErrorEvent(throwable)));
     }
@@ -185,7 +192,9 @@ public class AgentRunner {
                 return Flux.just(AgentResponse.error("Maximum rounds reached"));
             }
 
-            return executeStreamRoundWithBuffer(context);
+            // 发送进入思考循环的调试事件
+            return Flux.just(AgentResponse.debug("进入思考循环，当前轮次: " + context.getCurrentRound()))
+                    .concatWith(executeStreamRoundWithBuffer(context));
         });
     }
 
@@ -230,13 +239,6 @@ public class AgentRunner {
                                     return Flux.just(response)
                                         .concatWith(
                                             handleToolCallsWithDirectOutputCheck(response.getToolCalls(), context)
-                                                .flatMapMany(shouldContinue -> {
-                                                    if (shouldContinue) {
-                                                        return executeStreamLoop(context);
-                                                    } else {
-                                                        return Flux.empty();
-                                                    }
-                                                })
                                         );
                                 }
                             }
@@ -294,18 +296,8 @@ public class AgentRunner {
                 .orElse(null);
 
         if (toolCallResponse != null) {
-            // 执行工具调用并检查是否需要直接输出
-            return handleToolCallsWithDirectOutputCheck(toolCallResponse.getToolCalls(), context)
-                    .flatMapMany(shouldContinue -> {
-                        if (shouldContinue) {
-                            // 继续下一轮循环
-                            return executeStreamLoop(context);
-                        } else {
-                            // 直接输出，终止循环
-                            log.debug("Direct output detected, terminating stream loop");
-                            return Flux.empty();
-                        }
-                    });
+            // 执行工具调用
+            return handleToolCallsWithDirectOutputCheck(toolCallResponse.getToolCalls(), context);
         } else {
             // 没有工具调用，直接返回响应
             return Flux.fromIterable(responses);
@@ -322,22 +314,15 @@ public class AgentRunner {
                         !context.isMaxRoundsReached()) {
                         // 处理工具调用并检查是否需要继续
                         return handleToolCallsWithDirectOutputCheck(response.getToolCalls(), context)
-                                .flatMap(shouldContinue -> {
-                                    if (shouldContinue) {
-                                        // 继续下一轮
-                                        return executeNonStreamRound(context);
-                                    } else {
-                                        // 直接输出，终止循环，返回一个特殊的终止响应
-                                        log.debug("Direct output detected, terminating non-stream loop");
-                                        return Mono.just(AgentResponse.text("Direct output terminated", true));
-                                    }
-                                });
+                                .filter(r -> r.getType() == AgentResponse.ResponseType.TEXT)
+                                .next()
+                                .switchIfEmpty(Mono.just(AgentResponse.text("Direct output terminated", true)));
                     }
                     // 结束循环
                     return Mono.empty();
                 })
-                .filter(response -> response.getType() != AgentResponse.ResponseType.TOOL_CALL)
-                .last(); // 获取最后一个非工具调用响应
+                .filter(response -> response.getType() == AgentResponse.ResponseType.TEXT)
+                .last(); // 获取最后一个文本响应
     }
 
     /**
@@ -349,21 +334,17 @@ public class AgentRunner {
 
     /**
      * 处理工具调用并检查是否需要直接输出
-     * @return Mono<Boolean> - true表示继续循环，false表示终止循环
+     * @return Flux<AgentResponse> - 包含工具结果事件和后续响应
      */
-    private Mono<Boolean> handleToolCallsWithDirectOutputCheck(List<ToolCall> toolCalls, RunnerContext context) {
+    private Flux<AgentResponse> handleToolCallsWithDirectOutputCheck(List<ToolCall> toolCalls, RunnerContext context) {
         if (agent.getToolRegistry() == null) {
             log.error("Tool registry not available");
-            return Mono.error(new AgentException(
-                ErrorCode.SYSTEM_ERROR,
-                "Tool registry not available for agent: " + agent.getName()));
+            return Flux.just(AgentResponse.error("Tool registry not available for agent: " + agent.getName()));
         }
 
         // 检查轮次限制
         if (context.isMaxRoundsReached()) {
-            return Mono.error(new AgentException(
-                ErrorCode.CONTEXT_MAX_ROUNDS_EXCEEDED,
-                "Maximum rounds exceeded: " + context.getCurrentRound() + "/" + context.getMaxRounds()));
+            return Flux.just(AgentResponse.error("Maximum rounds exceeded: " + context.getCurrentRound() + "/" + context.getMaxRounds()));
         }
 
         // 创建ToolContext
@@ -385,7 +366,7 @@ public class AgentRunner {
                     .onErrorMap(error -> new AgentException(
                         ErrorCode.TOOL_EXECUTION_FAILED,
                         "Tool execution failed: " + directOutputAgentToolCall.getFunction().getName(), error))
-                    .flatMap(result -> {
+                    .flatMapMany(result -> {
                         // 处理工具调用结果
                         String content = result.isSuccess() ? result.getContent() : result.getError();
                         context.addToolMessage(result.getToolCallId(), content);
@@ -394,17 +375,19 @@ public class AgentRunner {
                         if (isAgentDirectOutput(result)) {
                             // 处理Agent直接输出 - 直接将内容添加到上下文，不需要特殊标记
                             return extractDirectOutputContent(result, context)
-                                    .flatMap(agentContent -> {
+                                    .flatMapMany(agentContent -> {
                                         if (agentContent != null && !agentContent.trim().isEmpty()) {
                                             // 将内容作为助手消息添加到上下文
                                             context.addMessage(new Message("assistant", agentContent));
                                             log.debug("DirectOutput AgentTool content added to context: {}", agentContent);
+                                            // 直接返回TEXT_RESPONSE事件
+                                            return Flux.just(AgentResponse.text(agentContent, true));
                                         }
-                                        return Mono.just(false); // 返回false表示终止循环
+                                        return Flux.empty();
                                     });
                         }
                         log.debug("AgentTool with directOutput=true executed, terminating loop");
-                        return Mono.just(false); // 返回false表示终止循环
+                        return Flux.empty();
                     });
         }
 
@@ -419,17 +402,17 @@ public class AgentRunner {
         return Flux.fromIterable(toolExecutions)
                 .flatMap(mono -> mono)
                 .collectList()
-                .flatMap(results -> {
+                .flatMapMany(results -> {
                     // 检查是否有直接输出的Agent调用
                     for (ToolResult result : results) {
                         if (isAgentDirectOutput(result)) {
                             // 处理Agent直接输出
                             return handleAgentDirectOutput(result, context)
-                                    .then(Mono.just(false)); // 返回false表示终止循环
+                                    .thenMany(Flux.empty()); // 返回空流表示终止循环
                         }
                     }
 
-                    // 普通工具调用处理
+                    // 普通工具调用处理 - 输出TOOL_RESULT事件
                     boolean hasSuccessfulToolCall = false;
                     for (ToolResult result : results) {
                         String content = result.isSuccess() ? result.getContent() : result.getError();
@@ -449,7 +432,15 @@ public class AgentRunner {
                         log.warn("All tool calls failed, not incrementing round. Current round: {}", context.getCurrentRound());
                     }
 
-                    return Mono.just(true); // 返回true表示继续循环
+                    // 创建TOOL_RESULT事件并继续下一轮循环
+                    AgentResponse toolResultResponse = AgentResponse.builder()
+                            .type(AgentResponse.ResponseType.TOOL_CALL) // 临时使用TOOL_CALL类型，后续会转换为TOOL_RESULT事件
+                            .content("Tool execution completed")
+                            .isFinalResponse(false)
+                            .build();
+
+                    return Flux.just(toolResultResponse)
+                            .concatWith(executeStreamLoop(context));
                 });
     }
 
@@ -549,6 +540,26 @@ public class AgentRunner {
                 return AgentEvent.thinking(response.getContent());
             default:
                 return AgentEvent.error("Unknown response type");
+        }
+    }
+
+    /**
+     * 将AgentResponse转换为AgentEvent
+     */
+    private Flux<AgentEvent> convertToAgentEventStream(AgentResponse response) {
+        switch (response.getType()) {
+            case TEXT:
+                return Flux.just(AgentEvent.textResponse(response.getContent(), response.isFinalResponse()));
+            case TOOL_CALL:
+                return Flux.just(AgentEvent.toolCall(response.getToolCalls()));
+            case ERROR:
+                return Flux.just(AgentEvent.error(response.getError()));
+            case THINKING:
+                return Flux.just(AgentEvent.thinking(response.getContent()));
+            case DEBUG:
+                return Flux.just(AgentEvent.debug(response.getContent()));
+            default:
+                return Flux.just(AgentEvent.error("Unknown response type"));
         }
     }
 
@@ -683,15 +694,12 @@ public class AgentRunner {
 
         if (directOutputAgentToolCall != null) {
             log.debug("Detected AgentTool with directOutput=true, will execute stream and output");
-            
             // 获取AgentTool执行器
             String toolName = directOutputAgentToolCall.getFunction().getName();
             ToolExecutor executor = agent.getToolRegistry().getExecutor(toolName);
-            
             if (executor instanceof AgentTool) {
                 AgentTool agentTool = (AgentTool) executor;
                 log.debug("Calling AgentTool.executeStream for directOutput streaming");
-                
                 // 调用AgentTool的executeStream方法
                 return agentTool.executeStream(directOutputAgentToolCall, toolContext)
                         .cast(AgentToolResponse.class)

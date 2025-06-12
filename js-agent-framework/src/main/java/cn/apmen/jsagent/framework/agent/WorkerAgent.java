@@ -97,7 +97,7 @@ public class WorkerAgent implements Agent {
                         if (accumulator.isComplete()) {
                             String content = accumulator.buildMessage().getContent();
                             if (content != null && !content.isEmpty()) {
-                                return Flux.just(AgentResponse.text(content, true));
+                                return Flux.just(AgentResponse.text("", true));
                             }
                         }
 
