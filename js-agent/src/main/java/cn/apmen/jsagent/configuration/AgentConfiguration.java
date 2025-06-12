@@ -1,7 +1,9 @@
-package cn.apmen.jsagent.config;
+package cn.apmen.jsagent.configuration;
 
 import cn.apmen.jsagent.framework.agent.WorkerAgent;
 import cn.apmen.jsagent.framework.conversation.impl.InMemoryConversationService;
+import cn.apmen.jsagent.framework.core.AgentConfig;
+import cn.apmen.jsagent.framework.core.AgentRunner;
 import cn.apmen.jsagent.framework.core.CoreAgent;
 import cn.apmen.jsagent.framework.llm.LlmConfig;
 import cn.apmen.jsagent.framework.openaiunified.OpenAIUnifiedChatClient;
@@ -24,7 +26,7 @@ import java.util.Map;
  * Agent框架配置类
  */
 @Configuration
-public class AgentConfig {
+public class AgentConfiguration {
 
 
     @Value("${agent.llm.openai.api-key}")
@@ -252,4 +254,17 @@ public class AgentConfig {
                 .tools(toolDefinitions)
                 .build();
     }
+
+    @Bean
+    public AgentConfig agentConfig() {
+        AgentConfig agentConfig = new AgentConfig();
+        agentConfig.setStreamToolCallContent(true);
+        return agentConfig;
+    }
+
+    @Bean
+    public AgentRunner agentRunner(CoreAgent coreAgent, AgentConfig agentConfig, ConversationService conversationService) {
+        return new AgentRunner(coreAgent, agentConfig, conversationService);
+    }
+
 }

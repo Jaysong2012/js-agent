@@ -52,6 +52,15 @@ public class AgentConfig {
     @Builder.Default
     private Boolean streamToolCallContent = true;
 
+    /**
+     * 最大上下文token数
+     */
     private Integer maxContextTokens;
+
+    /**
+     * 系统提示词模板（支持Mustache语法）
+     * 如果不设置，将使用默认模板
+     */
+    private String systemPromptTemplate;
 
 }

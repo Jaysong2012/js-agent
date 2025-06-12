@@ -69,7 +69,8 @@ public class RunnerContext {
 
     /**
      * 添加消息到历史记录
-     * 同时更新本地缓存和持久化存储
+     * RunnerContext负责执行期间的临时缓存，ConversationService负责持久化
+     * 这里只添加到本地缓存，持久化由AgentRunner统一管理
      */
     public void addMessage(Message message) {
         if (localMessageHistory == null) {
@@ -86,13 +87,9 @@ public class RunnerContext {
         }
 
         localMessageHistory.add(message);
-
-        // 异步持久化到ConversationService
-        if (conversationService != null && conversationId != null) {
-            conversationService.addMessage(conversationId, message)
-                .doOnError(error -> log.warn("Failed to persist message to ConversationService", error))
-                .subscribe();
-        }
+        log.debug("Message added to local cache: role={}, content={}", 
+            message.getRole(), 
+            message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null");
     }
 
     /**
@@ -141,8 +138,24 @@ public class RunnerContext {
             try {
                 List<Message> contextMessages = conversationService.getContextWindowMessages(
                     conversationId, maxContextTokens, systemPrompt).block();
-                if (contextMessages != null) {
+                if (contextMessages != null && !contextMessages.isEmpty()) {
+                    // 合并持久化的历史消息和本地缓存的消息
                     completeMessages.addAll(contextMessages);
+                    
+                    // 添加本地缓存中的新消息（避免重复）
+                    if (localMessageHistory != null) {
+                        synchronized (localMessageHistory) {
+                            for (Message localMsg : localMessageHistory) {
+                                // 简单的重复检查：如果最后几条消息不包含当前消息，则添加
+                                boolean isDuplicate = contextMessages.stream()
+                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) && 
+                                             msg.getContent().equals(localMsg.getContent()));
+                                if (!isDuplicate) {
+                                    completeMessages.add(localMsg);
+                                }
+                            }
+                        }
+                    }
                     return completeMessages;
                 }
             } catch (Exception e) {
@@ -162,7 +175,7 @@ public class RunnerContext {
 
     /**
      * 获取消息历史的副本（线程安全）
-     * 优先从ConversationService获取
+     * 优先从ConversationService获取完整历史，本地缓存作为补充
      */
     public List<Message> getMessageHistory() {
         // 如果有ConversationService，从持久化存储获取
@@ -170,12 +183,30 @@ public class RunnerContext {
             try {
                 List<Message> persistedHistory = conversationService.getConversationHistory(conversationId).block();
                 if (persistedHistory != null) {
-                    return persistedHistory;
+                    // 合并持久化历史和本地缓存
+                    List<Message> mergedHistory = new ArrayList<>(persistedHistory);
+                    
+                    // 添加本地缓存中的新消息
+                    if (localMessageHistory != null) {
+                        synchronized (localMessageHistory) {
+                            for (Message localMsg : localMessageHistory) {
+                                // 避免重复添加
+                                boolean isDuplicate = persistedHistory.stream()
+                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) && 
+                                             msg.getContent().equals(localMsg.getContent()));
+                                if (!isDuplicate) {
+                                    mergedHistory.add(localMsg);
+                                }
+                            }
+                        }
+                    }
+                    return mergedHistory;
                 }
             } catch (Exception e) {
                 log.warn("Failed to get conversation history from ConversationService, falling back to local", e);
             }
         }
+        
         // 降级到本地历史
         if (localMessageHistory == null) {
             return new ArrayList<>();
@@ -263,17 +294,47 @@ public class RunnerContext {
 
     /**
      * 同步本地历史到ConversationService
+     * 这个方法主要用于批量同步，正常情况下消息应该实时持久化
      */
     public void syncToConversationService() {
         if (conversationService != null && conversationId != null && localMessageHistory != null) {
             synchronized (localMessageHistory) {
                 if (!localMessageHistory.isEmpty()) {
                     conversationService.addMessages(conversationId, new ArrayList<>(localMessageHistory))
-                        .doOnSuccess(v -> log.debug("Synced {} messages to ConversationService", localMessageHistory.size()))
+                        .doOnSuccess(v -> {
+                            log.debug("Synced {} messages to ConversationService", localMessageHistory.size());
+                            // 同步成功后清空本地缓存（可选）
+                            // localMessageHistory.clear();
+                        })
                         .doOnError(error -> log.warn("Failed to sync messages to ConversationService", error))
                         .subscribe();
                 }
             }
+        }
+    }
+
+    /**
+     * 清空本地消息缓存
+     * 注意：这不会影响ConversationService中的持久化数据
+     */
+    public void clearLocalMessageCache() {
+        if (localMessageHistory != null) {
+            synchronized (localMessageHistory) {
+                localMessageHistory.clear();
+                log.debug("Local message cache cleared for conversation: {}", conversationId);
+            }
+        }
+    }
+
+    /**
+     * 获取本地缓存的消息数量
+     */
+    public int getLocalMessageCount() {
+        if (localMessageHistory == null) {
+            return 0;
+        }
+        synchronized (localMessageHistory) {
+            return localMessageHistory.size();
         }
     }
 

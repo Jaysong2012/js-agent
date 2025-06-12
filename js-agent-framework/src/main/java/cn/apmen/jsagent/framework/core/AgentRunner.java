@@ -2,8 +2,12 @@ package cn.apmen.jsagent.framework.core;
 
 import cn.apmen.jsagent.framework.conversation.ConversationMetadata;
 import cn.apmen.jsagent.framework.conversation.ConversationService;
+import cn.apmen.jsagent.framework.core.ContextInformation.ConversationInformation;
+import cn.apmen.jsagent.framework.core.ContextInformation.EnvironmentInformation;
+import cn.apmen.jsagent.framework.core.ContextInformation.UserInformation;
 import cn.apmen.jsagent.framework.exception.AgentException;
 import cn.apmen.jsagent.framework.exception.ErrorCode;
+import cn.apmen.jsagent.framework.execution.ExecutionContext;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
 import cn.apmen.jsagent.framework.protocol.UserChatRequest;
@@ -13,12 +17,20 @@ import cn.apmen.jsagent.framework.tool.AgentToolResponse;
 import cn.apmen.jsagent.framework.tool.ToolContext;
 import cn.apmen.jsagent.framework.tool.ToolExecutor;
 import cn.apmen.jsagent.framework.tool.ToolResult;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.samskivert.mustache.Mustache;
+import com.samskivert.mustache.Template;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -31,14 +43,39 @@ public class AgentRunner {
     private final CoreAgent agent;
     private final AgentConfig agentConfig;
     private final ObjectMapper objectMapper = new ObjectMapper();
-    // 注入ConversationService
     private final ConversationService conversationService;
+    private final Mustache.Compiler mustacheCompiler = Mustache.compiler();
 
-    // 配置ObjectMapper支持Java 8时间类型
+    // 默认系统提示词模板
+    private static final String DEFAULT_SYSTEM_PROMPT_TEMPLATE = """
+        你是一个智能助手，可以帮助用户解决各种问题，包括数学计算和天气查询。
+        {{#userInfo}}
+        用户信息：
+        - 用户名：{{username}}
+        - 首选语言：{{preferredLanguage}}
+        - 时区：{{timezone}}
+        {{#preferences.responseStyle}}
+        - 请使用{{.}}的回复风格
+        {{/preferences.responseStyle}}
+        {{/userInfo}}
+        {{#conversationInfo}}
+        {{^isNewConversation}}
+        这是一个继续的对话，请保持上下文的连贯性。
+        {{/isNewConversation}}
+        {{/conversationInfo}}
+        {{#environmentInfo}}
+        当前时间：{{currentTime}}
+        {{#availableTools}}
+        可用工具：{{#.}}{{.}}{{^-last}}, {{/-last}}{{/.}}
+        {{/availableTools}}
+        {{/environmentInfo}}
+        请根据用户的需求提供准确、有用的回答。
+        """;
+
+    // 配置ObjectMapper
     {
-        objectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
-        objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-        objectMapper.configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
 
     public AgentRunner(CoreAgent agent, AgentConfig agentConfig,
@@ -54,13 +91,18 @@ public class AgentRunner {
      * @return Agent事件流
      */
     public Flux<AgentEvent> runStream(UserChatRequest request) {
-        return Mono.fromCallable(() -> buildRunnerContext(request))
-                .flatMapMany(context -> {
+        return loadContextInformation(request)
+                .flatMapMany(contextInfo -> {
                     // 发送开始执行的调试事件
-                    return Flux.just(AgentEvent.debugInfo("开始执行Agent任务，用户ID: " + context.getUserId() +
-                                                        ", 会话ID: " + context.getConversationId()))
-                            .concatWith(executeStreamLoop(context)
-                                    .flatMap(this::convertToAgentEventStream));
+                    return Flux.just(AgentEvent.debugInfo("开始执行Agent任务，用户ID: " + contextInfo.getUserId() +
+                                                        ", 会话ID: " + contextInfo.getConversationId()))
+                            .concatWith(buildRunnerContextWithInfo(request, contextInfo)
+                                    .flatMapMany(context -> {
+                                        // 先添加用户消息到ConversationService
+                                        return addUserMessageToConversation(request, context)
+                                                .thenMany(executeStreamLoop(context))
+                                                .flatMap(this::convertToAgentEventStream);
+                                    }));
                 })
                 .doOnNext(event -> log.debug("Agent event generated: type={}, content={}",
                     event.getType(),
@@ -75,8 +117,10 @@ public class AgentRunner {
      * @return Agent事件
      */
     public Mono<AgentEvent> run(UserChatRequest request) {
-        return Mono.fromCallable(() -> buildRunnerContext(request))
-                .flatMap(this::executeNonStreamLoop)
+        return loadContextInformation(request)
+                .flatMap(contextInfo -> buildRunnerContextWithInfo(request, contextInfo))
+                .flatMap(context -> addUserMessageToConversation(request, context)
+                        .then(executeNonStreamLoop(context)))
                 .map(this::convertToAgentEvent)
                 .doOnNext(event -> log.debug("Agent event generated: {}", event))
                 .onErrorMap(this::mapToAgentException)
@@ -84,79 +128,338 @@ public class AgentRunner {
     }
 
     /**
-     * 构建RunnerContext
+     * 加载上下文信息（用户信息、会话信息、环境信息）
      */
-    private RunnerContext buildRunnerContext(UserChatRequest request) {
-        try {
+    private Mono<ContextInformation> loadContextInformation(UserChatRequest request) {
+        return Mono.fromCallable(() -> {
             // 验证请求参数
-            if (request == null) {
-                throw new AgentException(ErrorCode.CONFIG_INVALID,
-                    "UserChatRequest cannot be null");
-            }
+            validateRequest(request);
 
-            if (request.getUserId() == null || request.getUserId().trim().isEmpty()) {
-                throw new AgentException(ErrorCode.CONFIG_INVALID,
-                    "User ID cannot be null or empty");
-            }
+            log.debug("Loading context information for user: {}, conversation: {}",
+                request.getUserId(), request.getConversationId());
 
-            if (request.getConversationId() == null || request.getConversationId().trim().isEmpty()) {
-                throw new AgentException(ErrorCode.CONFIG_INVALID,
-                    "Conversation ID cannot be null or empty");
-            }
-
-            RunnerContext.RunnerContextBuilder builder = RunnerContext.builder()
-                    .conversationService(conversationService) // 注入ConversationService
+            return ContextInformation.builder()
                     .userId(request.getUserId())
                     .conversationId(request.getConversationId())
-                    .systemPrompt(buildSystemPrompt());
+                    .loadTime(LocalDateTime.now())
+                    .build();
+        })
+        .flatMap(this::enrichContextInformation);
+    }
 
-            // 设置上下文token限制
-            if (agentConfig != null && agentConfig.getMaxContextTokens() != null) {
-                builder.maxContextTokens(agentConfig.getMaxContextTokens());
-            }
+    /**
+     * 丰富上下文信息
+     */
+    private Mono<ContextInformation> enrichContextInformation(ContextInformation contextInfo) {
+        return Mono.zip(
+                loadUserInformation(contextInfo.getUserId()),
+                loadConversationInformation(contextInfo.getConversationId()),
+                loadEnvironmentInformation()
+        ).map(tuple -> {
+            UserInformation userInfo = tuple.getT1();
+            ConversationInformation conversationInfo = tuple.getT2();
+            EnvironmentInformation envInfo = tuple.getT3();
 
-            // 添加用户消息到本地历史（ConversationService会自动同步）
-            if (request.getMessage() != null && request.getMessage().getMessage() != null) {
-                builder.localMessageHistory(List.of(
-                        new Message("user", request.getMessage().getMessage())
-                ));
-            }
+            return contextInfo.toBuilder()
+                    .userInformation(userInfo)
+                    .conversationInformation(conversationInfo)
+                    .environmentInformation(envInfo)
+                    .build();
+        });
+    }
 
-            // 从配置中设置最大轮次
-            if (agentConfig != null && agentConfig.getMaxRounds() != null) {
-                builder.maxRounds(agentConfig.getMaxRounds());
-            }
+    /**
+     * 加载用户信息（可以从用户服务、数据库等获取）
+     */
+    private Mono<UserInformation> loadUserInformation(String userId) {
+        return Mono.fromCallable(() -> {
+            // TODO: 实际实现中应该从用户服务或数据库加载
+            // 这里先mock一些基本信息
+            log.debug("Loading user information for user: {}", userId);
 
-            RunnerContext context = builder.build();
+            return UserInformation.builder()
+                    .userId(userId)
+                    .username("User_" + userId)
+                    .preferredLanguage("zh-CN")
+                    .timezone("Asia/Shanghai")
+                    .userLevel("standard")
+                    .preferences(java.util.Map.of(
+                        "responseStyle", "friendly",
+                        "detailLevel", "medium"
+                    ))
+                    .build();
+        });
+    }
 
-            // 验证构建的上下文
-            if (!context.isValid()) {
+    /**
+     * 加载会话信息
+     */
+    private Mono<ConversationInformation> loadConversationInformation(String conversationId) {
+        if (conversationService == null) {
+            return Mono.just(ConversationInformation.builder()
+                    .conversationId(conversationId)
+                    .isNewConversation(true)
+                    .build());
+        }
+
+        return conversationService.conversationExists(conversationId)
+                .flatMap(exists -> {
+                    if (exists) {
+                        return conversationService.getConversationMetadata(conversationId)
+                                .map(metadata -> ConversationInformation.builder()
+                                        .conversationId(conversationId)
+                                        .isNewConversation(false)
+                                        .metadata(metadata)
+                                        .messageCount(0) // TODO: 从统计信息获取
+                                        .lastActiveTime(metadata.getLastActiveAt())
+                                        .build())
+                                .switchIfEmpty(Mono.just(ConversationInformation.builder()
+                                        .conversationId(conversationId)
+                                        .isNewConversation(false)
+                                        .build()));
+                    } else {
+                        return Mono.just(ConversationInformation.builder()
+                                .conversationId(conversationId)
+                                .isNewConversation(true)
+                                .build());
+                    }
+                });
+    }
+
+    /**
+     * 加载环境信息
+     */
+    private Mono<EnvironmentInformation> loadEnvironmentInformation() {
+        return Mono.fromCallable(() -> {
+            // TODO: 实际实现中可以加载系统状态、配置信息等
+            log.debug("Loading environment information");
+
+            return EnvironmentInformation.builder()
+                    .currentTime(LocalDateTime.now())
+                    .systemVersion("1.0.0")
+                    .availableTools(agent.getToolRegistry() != null ?
+                        agent.getToolRegistry().getRegisteredToolNames() : List.of())
+                    .systemLoad("normal")
+                    .build();
+        });
+    }
+
+    /**
+     * 使用上下文信息构建RunnerContext
+     */
+    private Mono<RunnerContext> buildRunnerContextWithInfo(UserChatRequest request, ContextInformation contextInfo) {
+        return Mono.fromCallable(() -> {
+            try {
+                // 生成执行ID
+                String executionId = UUID.randomUUID().toString();
+
+                // 构建执行上下文
+                ExecutionContext executionContext = ExecutionContext.builder()
+                        .executionId(executionId)
+                        .agentId(agent.getId())
+                        .userId(request.getUserId())
+                        .conversationId(request.getConversationId())
+                        .build();
+
+                // 构建系统提示词
+                String systemPrompt = buildSystemPromptWithContext(contextInfo);
+
+                RunnerContext.RunnerContextBuilder builder = RunnerContext.builder()
+                        .conversationService(conversationService)
+                        .userId(request.getUserId())
+                        .conversationId(request.getConversationId())
+                        .executionContext(executionContext)
+                        .systemPrompt(systemPrompt);
+
+                // 设置上下文token限制
+                if (agentConfig != null && agentConfig.getMaxContextTokens() != null) {
+                    builder.maxContextTokens(agentConfig.getMaxContextTokens());
+                }
+
+                // 从配置中设置最大轮次
+                if (agentConfig != null && agentConfig.getMaxRounds() != null) {
+                    builder.maxRounds(agentConfig.getMaxRounds());
+                }
+
+                RunnerContext context = builder.build();
+
+                // 验证构建的上下文
+                if (!context.isValid()) {
+                    throw new AgentException(
+                        ErrorCode.CONTEXT_INVALID_STATE,
+                        "Built context is invalid");
+                }
+
+                // 初始化会话元数据（如果是新会话）
+                if (contextInfo.getConversationInformation().isNewConversation()) {
+                    initializeConversationMetadata(context, contextInfo);
+                }
+
+                log.debug("Built RunnerContext with execution ID: {}", executionId);
+                return context;
+
+            } catch (AgentException e) {
+                throw e;
+            } catch (Exception e) {
                 throw new AgentException(
-                    ErrorCode.CONTEXT_INVALID_STATE,
-                    "Built context is invalid");
+                    ErrorCode.CONTEXT_BUILD_FAILED,
+                    "Failed to build runner context for user: " + request.getUserId(), e);
             }
+        });
+    }
 
-            // 初始化会话元数据（如果是新会话）
-            initializeConversationMetadata(context);
-
-            return context;
-        } catch (AgentException e) {
-            throw e; // 重新抛出AgentException
+    /**
+     * 根据上下文信息构建系统提示词，支持Mustache模板渲染
+     */
+    private String buildSystemPromptWithContext(ContextInformation contextInfo) {
+        try {
+            // 获取系统提示词模板
+            String template = getSystemPromptTemplate();
+            // 构建模板数据
+            Map<String, Object> templateData = buildTemplateData(contextInfo);
+            // 使用Mustache渲染模板
+            Template compiledTemplate = mustacheCompiler.compile(template);
+            String renderedPrompt = compiledTemplate.execute(templateData).trim();
+            log.debug("Rendered system prompt: {}", renderedPrompt.substring(0, Math.min(100, renderedPrompt.length())) + "...");
+            return renderedPrompt;
         } catch (Exception e) {
-            throw new AgentException(
-                ErrorCode.CONTEXT_BUILD_FAILED,
-                "Failed to build runner context for user: " + (request != null ? request.getUserId() : "null"), e);
+            log.warn("Failed to render system prompt template, using fallback", e);
+            return buildFallbackSystemPrompt(contextInfo);
         }
     }
 
-    private String buildSystemPrompt() {
-        return "一个智能助手，可以帮助用户解决各种问题，包括数学计算和天气查询";
+    /**
+     * 获取系统提示词模板
+     */
+    private String getSystemPromptTemplate() {
+        // 可以从配置文件、数据库等获取自定义模板
+        if (agentConfig != null && agentConfig.getSystemPromptTemplate() != null) {
+            return agentConfig.getSystemPromptTemplate();
+        }
+        return DEFAULT_SYSTEM_PROMPT_TEMPLATE;
+    }
+
+    /**
+     * 构建模板数据
+     */
+    private Map<String, Object> buildTemplateData(ContextInformation contextInfo) {
+        Map<String, Object> data = new HashMap<>();
+        // 用户信息
+        if (contextInfo.getUserInformation() != null) {
+            data.put("userInfo", contextInfo.getUserInformation());
+        }
+        // 会话信息
+        if (contextInfo.getConversationInformation() != null) {
+            data.put("conversationInfo", contextInfo.getConversationInformation());
+        }
+        // 环境信息
+        if (contextInfo.getEnvironmentInformation() != null) {
+            data.put("environmentInfo", contextInfo.getEnvironmentInformation());
+        }
+        return data;
+    }
+
+    /**
+     * 构建降级系统提示词（当模板渲染失败时使用）
+     */
+    private String buildFallbackSystemPrompt(ContextInformation contextInfo) {
+        StringBuilder promptBuilder = new StringBuilder();
+
+        // 基础系统提示
+        promptBuilder.append("你是一个智能助手，可以帮助用户解决各种问题，包括数学计算和天气查询。\n\n");
+
+        // 用户信息相关的提示
+        UserInformation userInfo = contextInfo.getUserInformation();
+        if (userInfo != null) {
+            promptBuilder.append("用户信息：\n");
+            promptBuilder.append("- 用户名：").append(userInfo.getUsername()).append("\n");
+            promptBuilder.append("- 首选语言：").append(userInfo.getPreferredLanguage()).append("\n");
+            promptBuilder.append("- 时区：").append(userInfo.getTimezone()).append("\n");
+
+            if (userInfo.getPreferences() != null) {
+                String responseStyle = (String) userInfo.getPreferences().get("responseStyle");
+                if (responseStyle != null) {
+                    promptBuilder.append("- 请使用").append(responseStyle).append("的回复风格\n");
+                }
+            }
+            promptBuilder.append("\n");
+        }
+
+        // 会话信息相关的提示
+        ConversationInformation convInfo = contextInfo.getConversationInformation();
+        if (convInfo != null && !convInfo.isNewConversation()) {
+            promptBuilder.append("这是一个继续的对话，请保持上下文的连贯性。\n\n");
+        }
+
+        // 环境信息相关的提示
+        EnvironmentInformation envInfo = contextInfo.getEnvironmentInformation();
+        if (envInfo != null) {
+            promptBuilder.append("当前时间：").append(envInfo.getCurrentTime()).append("\n");
+            if (envInfo.getAvailableTools() != null && !envInfo.getAvailableTools().isEmpty()) {
+                promptBuilder.append("可用工具：").append(String.join(", ", envInfo.getAvailableTools())).append("\n");
+            }
+            promptBuilder.append("\n");
+        }
+
+        promptBuilder.append("请根据用户的需求提供准确、有用的回答。");
+
+        return promptBuilder.toString();
+    }
+
+    /**
+     * 添加用户消息到ConversationService
+     */
+    private Mono<Void> addUserMessageToConversation(UserChatRequest request, RunnerContext context) {
+        if (request.getMessage() == null || request.getMessage().getMessage() == null) {
+            return Mono.empty();
+        }
+
+        Message userMessage = new Message("user", request.getMessage().getMessage());
+
+        // 先添加到ConversationService进行持久化
+        if (conversationService != null) {
+            return conversationService.addMessage(context.getConversationId(), userMessage)
+                    .doOnSuccess(v -> {
+                        // 成功持久化后，添加到RunnerContext的本地缓存
+                        context.addMessage(userMessage);
+                        log.debug("User message added to conversation: {}", request.getMessage().getMessage());
+                    })
+                    .doOnError(error -> {
+                        log.warn("Failed to persist user message, adding to local cache only", error);
+                        // 即使持久化失败，也要添加到本地缓存以保证功能正常
+                        context.addMessage(userMessage);
+                    });
+        } else {
+            // 没有ConversationService时，直接添加到本地缓存
+            context.addMessage(userMessage);
+            return Mono.empty();
+        }
+    }
+
+    /**
+     * 验证请求参数
+     */
+    private void validateRequest(UserChatRequest request) {
+        if (request == null) {
+            throw new AgentException(ErrorCode.CONFIG_INVALID,
+                "UserChatRequest cannot be null");
+        }
+
+        if (request.getUserId() == null || request.getUserId().trim().isEmpty()) {
+            throw new AgentException(ErrorCode.CONFIG_INVALID,
+                "User ID cannot be null or empty");
+        }
+
+        if (request.getConversationId() == null || request.getConversationId().trim().isEmpty()) {
+            throw new AgentException(ErrorCode.CONFIG_INVALID,
+                "Conversation ID cannot be null or empty");
+        }
     }
 
     /**
      * 初始化会话元数据
      */
-    private void initializeConversationMetadata(RunnerContext context) {
+    private void initializeConversationMetadata(RunnerContext context, ContextInformation contextInfo) {
         if (conversationService != null) {
             conversationService.conversationExists(context.getConversationId())
                 .flatMap(exists -> {
@@ -170,8 +473,8 @@ public class AgentRunner {
                                 .title("New Conversation")
                                 .status(ConversationMetadata.ConversationStatus.ACTIVE)
                                 .priority(ConversationMetadata.ConversationPriority.NORMAL)
-                                .createdAt(java.time.LocalDateTime.now())
-                                .lastActiveAt(java.time.LocalDateTime.now())
+                                .createdAt(LocalDateTime.now())
+                                .lastActiveAt(LocalDateTime.now())
                                 .build();
 
                         return conversationService.setConversationMetadata(context.getConversationId(), metadata);

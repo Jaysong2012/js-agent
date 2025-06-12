@@ -1,14 +1,12 @@
 package cn.apmen.jsagent.controller;
 
 import cn.apmen.jsagent.framework.conversation.ConversationService;
-import cn.apmen.jsagent.framework.core.AgentConfig;
+import cn.apmen.jsagent.framework.core.AgentEvent;
 import cn.apmen.jsagent.framework.core.AgentRunner;
-import cn.apmen.jsagent.framework.core.CoreAgent;
-import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import cn.apmen.jsagent.framework.protocol.UserChatMessage;
 import cn.apmen.jsagent.framework.protocol.UserChatRequest;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,13 +21,10 @@ import reactor.core.publisher.Mono;
 @RestController
 @RequestMapping("/api/chat")
 @Slf4j
+@RequiredArgsConstructor
 public class ChatController {
 
-    @Autowired
-    private CoreAgent coreAgent;
-
-    @Autowired
-    private ConversationService conversationService;
+    private final AgentRunner agentRunner;
 
     /**
      * 非流式聊天接口
@@ -46,11 +41,7 @@ public class ChatController {
                 .message(new UserChatMessage(request.getMessage()))
                 .build();
 
-        conversationService.addMessage(conversationId, new Message("user", request.getMessage())).block();
 
-        // 创建AgentRunner并执行
-        AgentConfig agentConfig = new AgentConfig(); // 使用默认配置
-        AgentRunner agentRunner = new AgentRunner(coreAgent, agentConfig, conversationService);
         return agentRunner.run(userChatRequest)
                 .map(response -> ChatResponse.builder()
                         .success(true)
@@ -67,7 +58,7 @@ public class ChatController {
      * 流式聊天接口
      */
     @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<cn.apmen.jsagent.framework.core.AgentEvent> chatStream(@RequestBody ChatRequest request) {
+    public Flux<AgentEvent> chatStream(@RequestBody ChatRequest request) {
         log.info("收到流式聊天请求: {}", request.getMessage());
 
         String conversationId = request.getConversationId() != null ? request.getConversationId() : "default-conversation";
@@ -78,12 +69,7 @@ public class ChatController {
                 .message(new UserChatMessage(request.getMessage()))
                 .build();
 
-        conversationService.addMessage(conversationId, new Message("user", request.getMessage())).block();
-
         // 创建AgentRunner并执行流式处理
-        cn.apmen.jsagent.framework.core.AgentConfig agentConfig = new cn.apmen.jsagent.framework.core.AgentConfig(); // 使用默认配置
-        agentConfig.setStreamToolCallContent(true);
-        AgentRunner agentRunner = new AgentRunner(coreAgent, agentConfig, conversationService);
         return agentRunner.runStream(userChatRequest)
                 .filter(event -> event != null) // 过滤null事件
                 .doOnSubscribe(subscription -> log.debug("Starting stream for conversation: {}", conversationId))

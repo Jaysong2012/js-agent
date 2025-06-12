@@ -28,11 +28,11 @@
 
 ### 📡 事件驱动架构
 - **AgentEvent**: 统一的事件模型
-    - `TEXT_RESPONSE`: 用户回复内容
-    - `TOOL_CALL`: 工具调用事件
-    - `TOOL_RESULT`: 工具执行结果
-    - `DEBUG`: 系统调试信息
-    - `ERROR`: 错误事件
+  - `TEXT_RESPONSE`: 用户回复内容
+  - `TOOL_CALL`: 工具调用事件
+  - `TOOL_RESULT`: 工具执行结果
+  - `DEBUG`: 系统调试信息
+  - `ERROR`: 错误事件
 
 ### 🌊 流式处理
 - **智能缓冲**: 根据配置智能决定缓冲策略

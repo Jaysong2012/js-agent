@@ -38,5 +38,3 @@ build/
 ### Others ###
 logs/
 
-### 临时屏蔽配置 ###
-js-agent/src/main/resources/application.yml

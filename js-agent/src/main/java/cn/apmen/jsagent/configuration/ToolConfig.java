@@ -1,4 +1,4 @@
-package cn.apmen.jsagent.config;
+package cn.apmen.jsagent.configuration;
 
 import cn.apmen.jsagent.framework.tool.ToolRegistry;
 import cn.apmen.jsagent.tools.CalculatorTool;
