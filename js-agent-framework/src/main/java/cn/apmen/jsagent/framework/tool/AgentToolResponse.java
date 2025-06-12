@@ -114,6 +114,7 @@ public class AgentToolResponse extends BaseToolResponse {
     /**
      * 获取调用摘要信息
      */
+    @com.fasterxml.jackson.annotation.JsonIgnore
     public String getCallSummary() {
         StringBuilder summary = new StringBuilder();
         summary.append("Agent Call: ").append(targetAgentName != null ? targetAgentName : targetAgentId);

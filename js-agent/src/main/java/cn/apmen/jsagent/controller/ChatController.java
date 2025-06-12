@@ -88,11 +88,16 @@ public class ChatController {
                 .filter(event -> event != null) // 过滤null事件
                 .flatMap(event -> {
                     // 根据事件类型处理不同的响应
+                    log.debug("Processing event: type={}, content={}", event.getType(),
+                        event.getContent() != null ? event.getContent().substring(0, Math.min(50, event.getContent().length())) + "..." : "null");
+
                     switch (event.getType()) {
                         case TEXT_RESPONSE:
                             if (event.getContent() != null && !event.getContent().trim().isEmpty()) {
+                                log.debug("Outputting TEXT_RESPONSE content: {} chars", event.getContent().length());
                                 return Flux.just("" + event.getContent() + "\n\n");
                             }
+                            log.debug("TEXT_RESPONSE content is null or empty");
                             break;
                         case THINKING:
                             if (event.getContent() != null && !event.getContent().trim().isEmpty()) {

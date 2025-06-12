@@ -53,7 +53,12 @@ public class CoreAgent {
             // 构建ChatCompletionRequest
             ChatCompletionRequest request = buildChatRequest(runnerContext);
             request.setStream(true); // 设置流式参数
-            log.info("request: {}", objectMapper.writeValueAsString(request));
+            
+            // 记录请求信息，但避免序列化整个request对象
+            log.info("Starting stream request - model: {}, messages: {}, tools: {}", 
+                request.getModel(), 
+                request.getMessages() != null ? request.getMessages().size() : 0,
+                request.getTools() != null ? request.getTools().size() : 0);
 
             // 调用OpenAI流式API，使用SSE解析器
             return openAIUnifiedChatClient.createChatCompletionStream(request)
