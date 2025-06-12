@@ -39,4 +39,4 @@ build/
 logs/
 
 ### 临时屏蔽配置 ###
-application.yml
+js-agent/src/main/resources/application.yml
