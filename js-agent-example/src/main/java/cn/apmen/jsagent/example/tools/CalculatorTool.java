@@ -1,4 +1,4 @@
-package cn.apmen.jsagent.tools;
+package cn.apmen.jsagent.example.tools;
 
 import cn.apmen.jsagent.framework.tool.ToolExecutor;
 import cn.apmen.jsagent.framework.tool.ToolContext;

@@ -1,4 +1,4 @@
-package cn.apmen.jsagent.configuration;
+package cn.apmen.jsagent.example.configuration;
 
 import cn.apmen.jsagent.framework.agent.WorkerAgent;
 import cn.apmen.jsagent.framework.conversation.impl.InMemoryConversationService;

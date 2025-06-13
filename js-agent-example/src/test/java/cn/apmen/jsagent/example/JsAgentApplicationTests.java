@@ -1,4 +1,4 @@
-package cn.apmen.jsagent;
+package cn.apmen.jsagent.example;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

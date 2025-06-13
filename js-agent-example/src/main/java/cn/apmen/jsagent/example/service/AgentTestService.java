@@ -1,4 +1,4 @@
-package cn.apmen.jsagent.service;
+package cn.apmen.jsagent.example.service;
 
 import cn.apmen.jsagent.framework.conversation.ConversationService;
 import cn.apmen.jsagent.framework.core.AgentConfig;

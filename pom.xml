@@ -30,7 +30,7 @@
 
 	<modules>
 		<module>js-agent-framework</module>
-		<module>js-agent</module>
+		<module>js-agent-example</module>
 	</modules>
 
 	<properties>

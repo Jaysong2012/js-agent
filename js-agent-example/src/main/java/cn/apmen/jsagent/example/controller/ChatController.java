@@ -1,4 +1,4 @@
-package cn.apmen.jsagent.controller;
+package cn.apmen.jsagent.example.controller;
 
 import cn.apmen.jsagent.framework.conversation.ConversationService;
 import cn.apmen.jsagent.framework.core.AgentEvent;
