@@ -518,38 +518,9 @@ public class AgentRunner {
                             // 继续缓冲，不输出
                             return Flux.empty();
 
-                        case START_STREAMING:
-                            // 开始流式输出：先输出缓冲区内容，然后输出当前响应
-                            List<AgentResponse> bufferedResponses = buffer.getBufferedResponses();
-                            buffer.clearBuffer();
-                            return Flux.fromIterable(bufferedResponses);
-
                         case DIRECT_OUTPUT:
-                            // 直接输出当前响应
-                            if (streamToolCallContent && response.getType() == AgentResponse.ResponseType.TOOL_CALL) {
-                                // 检查是否为directOutput=true的AgentTool
-                                boolean isDirectOutputAgentTool = response.getToolCalls().stream()
-                                    .anyMatch(this::isDirectOutputAgentTool);
-                                if (isDirectOutputAgentTool) {
-                                    // directOutput=true的AgentTool，直接执行并流式输出内容
-                                    log.debug("DirectOutput AgentTool detected, executing with streaming output");
-                                    return Flux.just(response)
-                                        .concatWith(
-                                            handleDirectOutputAgentToolStreaming(response.getToolCalls(), context)
-                                        );
-                                } else {
-                                    // 普通工具调用
-                                    return Flux.just(response)
-                                        .concatWith(
-                                            handleToolCallsWithDirectOutputCheck(response.getToolCalls(), context)
-                                        );
-                                }
-                            }
+                            // 直接输出当前响应（streamToolCallContent=true模式）
                             return Flux.just(response);
-
-                        case WAIT_FOR_COMPLETION:
-                            // 检测到工具调用，继续缓冲，不输出
-                            return Flux.empty();
 
                         case RELEASE_ALL:
                             // 流式完成，根据配置和工具调用情况处理
@@ -558,33 +529,24 @@ public class AgentRunner {
                         default:
                             return Flux.empty();
                     }
-                })
-                .concatWith(Flux.defer(() -> {
-                    // 处理流式结束后的情况
-                    if (!streamToolCallContent && buffer.isToolCallDetected() && !buffer.isStreamCompleted()) {
-                        return handleStreamCompletion(buffer, streamToolCallContent, context);
-                    }
-                    return Flux.empty();
-                }));
+                });
     }
     /**
      * 处理流式完成的情况
      */
     private Flux<AgentResponse> handleStreamCompletion(StreamBuffer buffer, boolean streamToolCallContent, RunnerContext context) {
         if (buffer.isToolCallDetected()) {
-            if (streamToolCallContent) {
-                // 配置为流式输出：内容已经输出，只处理工具调用
-                return handleToolCallsInStream(buffer.getBufferedResponses(), context);
-            } else {
-                // 配置为不流式输出：忽略文本内容，只处理工具调用
-                log.debug("Tool call detected with streamToolCallContent=false, ignoring text content");
-                return handleToolCallsInStream(buffer.getBufferedResponses(), context);
-            }
+            // 检测到工具调用，需要执行工具
+            return handleToolCallsInStream(buffer.getBufferedResponses(), context);
         } else {
-            // 没有工具调用，输出所有内容
-            List<AgentResponse> responses = streamToolCallContent ?
-                buffer.getBufferedResponses() : buffer.getTextResponses();
-            return Flux.fromIterable(responses);
+            // 没有工具调用
+            if (streamToolCallContent) {
+                // streamToolCallContent=true: 内容已经通过DIRECT_OUTPUT输出，无需再输出
+                return Flux.empty();
+            } else {
+                // streamToolCallContent=false: 内容被缓冲，现在输出文本内容
+                return Flux.fromIterable(buffer.getTextResponses());
+            }
         }
     }
 
@@ -592,19 +554,14 @@ public class AgentRunner {
      * 处理流式响应中的工具调用
      */
     private Flux<AgentResponse> handleToolCallsInStream(List<AgentResponse> responses, RunnerContext context) {
-        // 找到工具调用响应
+        // 找到工具调用响应（调用此方法时已确保存在工具调用）
         AgentResponse toolCallResponse = responses.stream()
                 .filter(r -> r.getType() == AgentResponse.ResponseType.TOOL_CALL)
                 .findFirst()
-                .orElse(null);
+                .orElseThrow(() -> new IllegalStateException("Expected tool call response but not found"));
 
-        if (toolCallResponse != null) {
-            // 执行工具调用
-            return handleToolCallsWithDirectOutputCheck(toolCallResponse.getToolCalls(), context);
-        } else {
-            // 没有工具调用，直接返回响应
-            return Flux.fromIterable(responses);
-        }
+        // 执行工具调用
+        return handleToolCallsWithDirectOutputCheck(toolCallResponse.getToolCalls(), context);
     }
 
     /**

@@ -59,14 +59,8 @@ public class StreamBuffer {
             return BufferDecision.DIRECT_OUTPUT;
         } else {
             // 模式2: 智能缓冲 - 缓冲所有内容，等流式完成后根据是否有工具调用决定
-            if (response.isFinalResponse()) {
-                // 流式完成，决定如何处理缓冲的内容
-                return BufferDecision.RELEASE_ALL;
-            } else {
-                // 继续缓冲
-                log.trace("streamToolCallContent=false, buffering all content (size: {})", buffer.size());
-                return BufferDecision.CONTINUE_BUFFERING;
-            }
+            log.trace("streamToolCallContent=false, buffering all content (size: {})", buffer.size());
+            return BufferDecision.CONTINUE_BUFFERING;
         }
     }
     /**
@@ -116,8 +110,6 @@ public class StreamBuffer {
      */
     public enum BufferDecision {
         CONTINUE_BUFFERING,    // 继续缓冲
-        START_STREAMING,       // 开始流式输出
-        WAIT_FOR_COMPLETION,   // 等待完成（检测到工具调用）
         RELEASE_ALL,           // 释放所有内容
         DIRECT_OUTPUT          // 直接输出当前响应
     }

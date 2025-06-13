@@ -54,7 +54,7 @@ public class SSEParser {
             ChatCompletionStreamResponse response = objectMapper.readValue(jsonData, ChatCompletionStreamResponse.class);
             return Flux.just(response);
         } catch (Exception e) {
-            log.debug("Failed to parse JSON: {}, error: {}", jsonData, e.getMessage());
+            log.error("Failed to parse JSON: {}, error: {}", jsonData, e.getMessage());
             return Flux.empty(); // 忽略无法解析的数据
         }
     }

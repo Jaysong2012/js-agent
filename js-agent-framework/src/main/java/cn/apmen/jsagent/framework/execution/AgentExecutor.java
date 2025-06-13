@@ -108,14 +108,8 @@ public class AgentExecutor {
                     switch (decision) {
                         case CONTINUE_BUFFERING:
                             return Flux.empty();
-                        case START_STREAMING:
-                            List<AgentResponse> bufferedResponses = buffer.getBufferedResponses();
-                            buffer.clearBuffer();
-                            return Flux.fromIterable(bufferedResponses);
                         case DIRECT_OUTPUT:
                             return Flux.just(response);
-                        case WAIT_FOR_COMPLETION:
-                            return Flux.empty();
                         case RELEASE_ALL:
                             if (buffer.isToolCallDetected()) {
                                 return handleToolCallsInStream(buffer.getBufferedResponses(), agent, context);

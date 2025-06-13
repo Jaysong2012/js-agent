@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -79,7 +80,7 @@ public class RunnerContext {
 
         // 确保localMessageHistory是可变的集合
         if (!(localMessageHistory instanceof ArrayList) &&
-            !(localMessageHistory instanceof java.util.concurrent.CopyOnWriteArrayList) &&
+            !(localMessageHistory instanceof CopyOnWriteArrayList) &&
             !localMessageHistory.getClass().getName().contains("SynchronizedList")) {
             // 如果是不可变集合，重新创建为可变集合
             List<Message> newHistory = Collections.synchronizedList(new ArrayList<>(localMessageHistory));

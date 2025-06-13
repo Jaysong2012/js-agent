@@ -100,6 +100,7 @@ public class CoreAgent {
                                 return Flux.just(AgentResponse.toolCall(completeMessage.getToolCalls()));
                             } else {
                                 String content = completeMessage.getContent() != null ? completeMessage.getContent() : "";
+                                log.info("Agent runStream: allContent={}", content);
                                 return Flux.just(AgentResponse.text("", true));
                             }
                         }
