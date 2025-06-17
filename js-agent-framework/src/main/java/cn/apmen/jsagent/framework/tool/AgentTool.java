@@ -169,9 +169,9 @@ public class AgentTool extends Tool implements StreamingToolExecutor {
      */
     private ToolResult createSpecialToolResult(AgentToolResponse response) {
         try {
-            // 在content中添加特殊标记，让AgentRunner知道这是直接输出
-            String specialContent = "AGENT_DIRECT_OUTPUT:" + objectMapper.writeValueAsString(response);
-            return ToolResult.success(response.getToolCallId(), specialContent);
+            // 直接返回 JSON 格式的 AgentToolResponse，不需要特殊标记
+            String jsonContent = objectMapper.writeValueAsString(response);
+            return ToolResult.success(response.getToolCallId(), jsonContent);
         } catch (Exception e) {
             log.error("Failed to serialize AgentToolResponse", e);
             return ToolResult.error(response.getToolCallId(), "Failed to create special tool result");

@@ -6,9 +6,8 @@ import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Tool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
+import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -72,7 +71,7 @@ public class OpenAIUnifiedChatClient {
         return webClient.post()
                 .uri("/chat/completions")
                 .bodyValue(request)
-                .accept(org.springframework.http.MediaType.TEXT_EVENT_STREAM) // 明确指定接受SSE
+                .accept(MediaType.TEXT_EVENT_STREAM) // 明确指定接受SSE
                 .retrieve()
                 .bodyToFlux(String.class)
                 .doOnNext(line -> log.trace("Raw SSE line: {}", line))

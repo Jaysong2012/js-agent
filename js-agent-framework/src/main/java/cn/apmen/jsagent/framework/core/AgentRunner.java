@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.samskivert.mustache.Mustache;
 import com.samskivert.mustache.Template;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.CollectionUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -74,6 +75,8 @@ public class AgentRunner {
 
     // 配置ObjectMapper
     {
+        // 注册 JSR310 模块以支持 Java 8 时间类型
+        objectMapper.findAndRegisterModules();
         objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     }
@@ -415,25 +418,12 @@ public class AgentRunner {
         }
 
         Message userMessage = new Message("user", request.getMessage().getMessage());
-
-        // 先添加到ConversationService进行持久化
-        if (conversationService != null) {
-            return conversationService.addMessage(context.getConversationId(), userMessage)
-                    .doOnSuccess(v -> {
-                        // 成功持久化后，添加到RunnerContext的本地缓存
-                        context.addMessage(userMessage);
-                        log.debug("User message added to conversation: {}", request.getMessage().getMessage());
-                    })
-                    .doOnError(error -> {
-                        log.warn("Failed to persist user message, adding to local cache only", error);
-                        // 即使持久化失败，也要添加到本地缓存以保证功能正常
-                        context.addMessage(userMessage);
-                    });
-        } else {
-            // 没有ConversationService时，直接添加到本地缓存
-            context.addMessage(userMessage);
-            return Mono.empty();
-        }
+        
+        // RunnerContext.addMessage 现在已经处理了持久化，直接添加即可
+        context.addMessage(userMessage);
+        log.debug("User message added to conversation: {}", request.getMessage().getMessage());
+        
+        return Mono.empty();
     }
 
     /**
@@ -556,7 +546,7 @@ public class AgentRunner {
     private Flux<AgentResponse> handleToolCallsInStream(List<AgentResponse> responses, RunnerContext context) {
         // 找到工具调用响应（调用此方法时已确保存在工具调用）
         AgentResponse toolCallResponse = responses.stream()
-                .filter(r -> r.getType() == AgentResponse.ResponseType.TOOL_CALL)
+                .filter(r -> !CollectionUtils.isEmpty(r.getToolCalls()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("Expected tool call response but not found"));
 
@@ -613,45 +603,52 @@ public class AgentRunner {
                 .currentRound(context.getCurrentRound())
                 .build();
 
-        // 检查是否有AgentTool设置为directOutput=true
-        ToolCall directOutputAgentToolCall = toolCalls.stream()
-                .filter(this::isDirectOutputAgentTool)
-                .findFirst()
-                .orElse(null);
+        // 情况1：如果只有一个Tool，检查是否为directOutput的AgentTool
+        if (toolCalls.size() == 1) {
+            ToolCall singleToolCall = toolCalls.get(0);
 
-        if (directOutputAgentToolCall != null) {
-            log.debug("Detected AgentTool with directOutput=true, will execute only this tool and terminate loop");
-            // 只执行这个AgentTool，忽略其他工具调用
-            return agent.getToolRegistry().execute(directOutputAgentToolCall, toolContext)
-                    .onErrorMap(error -> new AgentException(
-                        ErrorCode.TOOL_EXECUTION_FAILED,
-                        "Tool execution failed: " + directOutputAgentToolCall.getFunction().getName(), error))
-                    .flatMapMany(result -> {
-                        // 处理工具调用结果
-                        String content = result.isSuccess() ? result.getContent() : result.getError();
-                        context.addToolMessage(result.getToolCallId(), content);
+            // 检查是否为设置了directOutput=true的AgentTool
+            if (isDirectOutputAgentTool(singleToolCall)) {
+                log.debug("Single AgentTool with directOutput=true detected, executing and terminating loop");
 
-                        // 检查是否有直接输出的Agent调用
-                        if (isAgentDirectOutput(result)) {
-                            // 处理Agent直接输出 - 直接将内容添加到上下文，不需要特殊标记
-                            return extractDirectOutputContent(result, context)
-                                    .flatMapMany(agentContent -> {
-                                        if (agentContent != null && !agentContent.trim().isEmpty()) {
-                                            // 将内容作为助手消息添加到上下文
-                                            context.addMessage(new Message("assistant", agentContent));
-                                            log.debug("DirectOutput AgentTool content added to context: {}", agentContent);
-                                            // 直接返回TEXT_RESPONSE事件
-                                            return Flux.just(AgentResponse.text(agentContent, true));
-                                        }
-                                        return Flux.empty();
-                                    });
-                        }
-                        log.debug("AgentTool with directOutput=true executed, terminating loop");
-                        return Flux.empty();
-                    });
+                return agent.getToolRegistry().execute(singleToolCall, toolContext)
+                        .onErrorMap(error -> new AgentException(
+                            ErrorCode.TOOL_EXECUTION_FAILED,
+                            "Tool execution failed: " + singleToolCall.getFunction().getName(), error))
+                        .flatMapMany(result -> {
+                            // 处理工具调用结果
+                            String content = result.isSuccess() ? result.getContent() : result.getError();
+                            context.addToolMessage(result.getToolCallId(), content);
+
+                            // 对于 directOutput 的 AgentTool，直接解析并返回内容
+                            if (result.isSuccess()) {
+                                try {
+                                    // 直接解析 AgentToolResponse
+                                    AgentToolResponse agentResponse = objectMapper.readValue(result.getContent(), AgentToolResponse.class);
+                                    String agentContent = agentResponse.getContent();
+
+                                    if (agentContent != null && !agentContent.trim().isEmpty()) {
+                                        // 将内容作为助手消息添加到上下文
+                                        context.addMessage(new Message("assistant", agentContent));
+                                        log.debug("DirectOutput AgentTool content added to context: {}", agentContent);
+                                        // 直接返回TEXT_RESPONSE事件，停止Loop
+                                        return Flux.just(AgentResponse.text(agentContent, true));
+                                    }
+                                } catch (Exception e) {
+                                    log.error("Failed to parse AgentToolResponse", e);
+                                }
+                            }
+
+                            log.debug("AgentTool with directOutput=true executed, terminating loop");
+                            return Flux.empty();
+                        });
+            }
         }
 
-        // 没有directOutput=true的AgentTool，执行所有工具调用
+        // 情况2：多个Tool或单个非directOutput Tool，并行执行所有工具调用
+        log.debug("Executing {} tools in parallel", toolCalls.size());
+
+        // 创建所有工具执行的Mono
         List<Mono<ToolResult>> toolExecutions = toolCalls.stream()
                 .map(toolCall -> agent.getToolRegistry().execute(toolCall, toolContext)
                     .onErrorMap(error -> new AgentException(
@@ -659,20 +656,11 @@ public class AgentRunner {
                         "Tool execution failed: " + toolCall.getFunction().getName(), error)))
                 .collect(Collectors.toList());
 
-        return Flux.fromIterable(toolExecutions)
-                .flatMap(mono -> mono)
+        // 使用 Flux.merge 确保真正的并行执行
+        return Flux.merge(toolExecutions)
                 .collectList()
                 .flatMapMany(results -> {
-                    // 检查是否有直接输出的Agent调用
-                    for (ToolResult result : results) {
-                        if (isAgentDirectOutput(result)) {
-                            // 处理Agent直接输出
-                            return handleAgentDirectOutput(result, context)
-                                    .thenMany(Flux.empty()); // 返回空流表示终止循环
-                        }
-                    }
-
-                    // 普通工具调用处理 - 输出TOOL_RESULT事件
+                    // 将所有工具结果成对添加到Message
                     boolean hasSuccessfulToolCall = false;
                     for (ToolResult result : results) {
                         String content = result.isSuccess() ? result.getContent() : result.getError();
@@ -692,15 +680,9 @@ public class AgentRunner {
                         log.warn("All tool calls failed, not incrementing round. Current round: {}", context.getCurrentRound());
                     }
 
-                    // 创建TOOL_RESULT事件并继续下一轮循环
-                    AgentResponse toolResultResponse = AgentResponse.builder()
-                            .type(AgentResponse.ResponseType.TOOL_CALL) // 临时使用TOOL_CALL类型，后续会转换为TOOL_RESULT事件
-                            .content("Tool execution completed")
-                            .isFinalResponse(false)
-                            .build();
-
-                    return Flux.just(toolResultResponse)
-                            .concatWith(executeStreamLoop(context));
+                    // 触发CoreAgent的思考并继续Loop
+                    log.debug("All tools executed, triggering CoreAgent thinking and continuing loop");
+                    return executeStreamLoop(context);
                 });
     }
 
@@ -720,69 +702,6 @@ public class AgentRunner {
             return agentTool.isDirectOutput();
         }
         return false;
-    }
-
-    /**
-     * 检查是否为Agent直接输出
-     */
-    private boolean isAgentDirectOutput(ToolResult result) {
-        return result.isSuccess() &&
-               result.getContent() != null &&
-               result.getContent().startsWith("AGENT_DIRECT_OUTPUT:");
-    }
-
-    /**
-     * 处理Agent直接输出
-     */
-    private Mono<Void> handleAgentDirectOutput(ToolResult result, RunnerContext context) {
-        try {
-            // 解析AgentToolResponse
-            String jsonContent = result.getContent().substring("AGENT_DIRECT_OUTPUT:".length());
-            AgentToolResponse agentResponse = objectMapper.readValue(jsonContent, AgentToolResponse.class);
-
-            log.info("Agent direct output detected: Agent={}, DirectOutput={}",
-                agentResponse.getTargetAgentName() != null ? agentResponse.getTargetAgentName() : agentResponse.getTargetAgentId(),
-                agentResponse.isDirectOutput());
-
-            // 标记上下文为直接输出模式
-            String agentName = agentResponse.getTargetAgentName() != null ?
-                agentResponse.getTargetAgentName() : agentResponse.getTargetAgentId();
-            context.addSystemMessage("Agent " + agentName +
-                " provided direct output to user. Conversation flow interrupted.");
-
-            // 设置特殊标记，让AgentRunner知道要停止Think循环
-            context.addMessage(new Message(
-                "system", "DIRECT_OUTPUT_MARKER"));
-
-            return Mono.empty();
-
-        } catch (Exception e) {
-            log.error("Failed to handle agent direct output", e);
-            return Mono.empty();
-        }
-    }
-
-    /**
-     * 提取并添加直接输出内容到上下文
-     */
-    private Mono<Void> extractAndAddDirectOutputContent(ToolResult result, RunnerContext context) {
-        try {
-            // 解析AgentToolResponse
-            String jsonContent = result.getContent().substring("AGENT_DIRECT_OUTPUT:".length());
-            AgentToolResponse agentResponse = objectMapper.readValue(jsonContent, AgentToolResponse.class);
-
-            // 将AgentTool的内容作为助手消息添加到上下文中
-            if (agentResponse.getContent() != null && !agentResponse.getContent().trim().isEmpty()) {
-                context.addMessage(new Message("assistant", agentResponse.getContent()));
-                log.debug("Added direct output content to context: {}", agentResponse.getContent());
-            }
-
-            return Mono.empty();
-
-        } catch (Exception e) {
-            log.error("Failed to extract direct output content", e);
-            return Mono.empty();
-        }
     }
 
     /**
@@ -902,7 +821,7 @@ public class AgentRunner {
     private Mono<String> extractDirectOutputContent(ToolResult result, RunnerContext context) {
         try {
             // 解析AgentToolResponse
-            String jsonContent = result.getContent().substring("AGENT_DIRECT_OUTPUT:".length());
+            String jsonContent = result.getContent();
             AgentToolResponse agentResponse = objectMapper.readValue(jsonContent, AgentToolResponse.class);
 
             // 返回AgentTool的内容

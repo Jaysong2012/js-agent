@@ -3,6 +3,8 @@ package cn.apmen.jsagent.framework.core;
 import cn.apmen.jsagent.framework.conversation.ConversationService;
 import cn.apmen.jsagent.framework.execution.ExecutionContext;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -26,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 public class RunnerContext {
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private ConversationService conversationService;
 
@@ -71,7 +74,7 @@ public class RunnerContext {
     /**
      * 添加消息到历史记录
      * RunnerContext负责执行期间的临时缓存，ConversationService负责持久化
-     * 这里只添加到本地缓存，持久化由AgentRunner统一管理
+     * 先添加到本地缓存保证功能正常，然后异步持久化
      */
     public void addMessage(Message message) {
         if (localMessageHistory == null) {
@@ -87,10 +90,28 @@ public class RunnerContext {
             localMessageHistory = newHistory;
         }
 
+        // 先添加到本地缓存，保证功能正常
         localMessageHistory.add(message);
-        log.debug("Message added to local cache: role={}, content={}", 
-            message.getRole(), 
-            message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null");
+
+        // 异步持久化到ConversationService
+        if (conversationService != null && conversationId != null) {
+            conversationService.addMessage(conversationId, message)
+                .doOnSuccess(v -> log.debug("Message persisted to ConversationService: role={}, content={}",
+                    message.getRole(),
+                    message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null"))
+                .doOnError(error -> log.warn("Failed to persist message to ConversationService, message kept in local cache only", error))
+                .subscribe(); // 异步执行，不阻塞主流程
+        }
+
+        try {
+            log.debug("Message added to local cache: role={}, content={}",
+                message.getRole(),
+                message.getContent() != null ? objectMapper.writeValueAsString(message) : "null");
+        } catch (JsonProcessingException e) {
+            log.debug("Message added to local cache: role={}, content={}",
+                message.getRole(),
+                message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null");
+        }
     }
 
     /**
@@ -142,14 +163,13 @@ public class RunnerContext {
                 if (contextMessages != null && !contextMessages.isEmpty()) {
                     // 合并持久化的历史消息和本地缓存的消息
                     completeMessages.addAll(contextMessages);
-                    
                     // 添加本地缓存中的新消息（避免重复）
                     if (localMessageHistory != null) {
                         synchronized (localMessageHistory) {
                             for (Message localMsg : localMessageHistory) {
                                 // 简单的重复检查：如果最后几条消息不包含当前消息，则添加
                                 boolean isDuplicate = contextMessages.stream()
-                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) && 
+                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) &&
                                              msg.getContent().equals(localMsg.getContent()));
                                 if (!isDuplicate) {
                                     completeMessages.add(localMsg);
@@ -186,14 +206,13 @@ public class RunnerContext {
                 if (persistedHistory != null) {
                     // 合并持久化历史和本地缓存
                     List<Message> mergedHistory = new ArrayList<>(persistedHistory);
-                    
                     // 添加本地缓存中的新消息
                     if (localMessageHistory != null) {
                         synchronized (localMessageHistory) {
                             for (Message localMsg : localMessageHistory) {
                                 // 避免重复添加
                                 boolean isDuplicate = persistedHistory.stream()
-                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) && 
+                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) &&
                                              msg.getContent().equals(localMsg.getContent()));
                                 if (!isDuplicate) {
                                     mergedHistory.add(localMsg);
@@ -207,7 +226,6 @@ public class RunnerContext {
                 log.warn("Failed to get conversation history from ConversationService, falling back to local", e);
             }
         }
-        
         // 降级到本地历史
         if (localMessageHistory == null) {
             return new ArrayList<>();

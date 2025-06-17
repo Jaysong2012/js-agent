@@ -1,6 +1,5 @@
 package cn.apmen.jsagent.example.controller;
 
-import cn.apmen.jsagent.framework.conversation.ConversationService;
 import cn.apmen.jsagent.framework.core.AgentEvent;
 import cn.apmen.jsagent.framework.core.AgentRunner;
 import cn.apmen.jsagent.framework.protocol.UserChatMessage;
@@ -14,6 +13,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.util.Objects;
 
 /**
  * 聊天控制器 - 提供Agent聊天API
@@ -71,7 +72,7 @@ public class ChatController {
 
         // 创建AgentRunner并执行流式处理
         return agentRunner.runStream(userChatRequest)
-                .filter(event -> event != null) // 过滤null事件
+                .filter(Objects::nonNull) // 过滤null事件
                 .doOnSubscribe(subscription -> log.debug("Starting stream for conversation: {}", conversationId))
                 .doOnNext(event -> log.debug("Streaming event: type={}, content={}",
                     event.getType(),

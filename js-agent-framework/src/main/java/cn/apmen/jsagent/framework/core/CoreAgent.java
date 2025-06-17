@@ -55,10 +55,7 @@ public class CoreAgent {
             request.setStream(true); // 设置流式参数
 
             // 记录请求信息，但避免序列化整个request对象
-            log.info("Starting stream request - model: {}, messages: {}, tools: {}", 
-                request.getModel(), 
-                request.getMessages() != null ? request.getMessages().size() : 0,
-                request.getTools() != null ? request.getTools().size() : 0);
+            log.info("Starting stream request {}", objectMapper.writeValueAsString(request));
 
             // 调用OpenAI流式API，使用SSE解析器
             return openAIUnifiedChatClient.createChatCompletionStream(request)
@@ -95,14 +92,14 @@ public class CoreAgent {
                             // 添加完整消息到上下文
                             runnerContext.addMessage(completeMessage);
 
+                            AgentResponse completeResponse = AgentResponse.text("", true);
+
                             // 检查是否有工具调用
                             if (completeMessage.getToolCalls() != null && !completeMessage.getToolCalls().isEmpty()) {
-                                return Flux.just(AgentResponse.toolCall(completeMessage.getToolCalls()));
-                            } else {
-                                String content = completeMessage.getContent() != null ? completeMessage.getContent() : "";
-                                log.info("Agent runStream: allContent={}", content);
-                                return Flux.just(AgentResponse.text("", true));
+                                completeResponse.setToolCalls(completeMessage.getToolCalls());
                             }
+
+                            return Flux.just(completeResponse);
                         }
 
                         return Flux.empty();

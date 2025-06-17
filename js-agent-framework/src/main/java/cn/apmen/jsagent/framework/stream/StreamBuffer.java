@@ -3,6 +3,7 @@ package cn.apmen.jsagent.framework.stream;
 import cn.apmen.jsagent.framework.core.AgentResponse;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,7 +40,7 @@ public class StreamBuffer {
         buffer.add(response);
 
         // 记录工具调用状态
-        if (response.getType() == AgentResponse.ResponseType.TOOL_CALL) {
+        if (!CollectionUtils.isEmpty(response.getToolCalls())) {
             toolCallDetected.set(true);
             log.debug("Tool call detected, streamToolCallContent={}", streamToolCallContent);
         }
@@ -47,10 +48,7 @@ public class StreamBuffer {
         // 检查是否是最终响应
         if (response.isFinalResponse()) {
             streamCompleted.set(true);
-            if (!streamToolCallContent) {
-                // 只有在不流式输出时才需要特殊处理
-                return BufferDecision.RELEASE_ALL;
-            }
+            return BufferDecision.RELEASE_ALL;
         }
 
         if (streamToolCallContent) {
