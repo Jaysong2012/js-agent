@@ -25,9 +25,13 @@ agent:
     default-max-tokens: 2000
     # OpenAI 统一API 配置
     openai:
-      base-url: "your-base-url"
-      api-key: "your-api-key"
+      base-url: "your-openai-base-url"
+      api-key: "your-openai-api-key"
       timeout: 30s
+  mcp:
+    bingsearch:
+      url: "your-mcp-bingsearch-url"
+      sse-endpoint: "your-mcp-bingsearch-sse-endpoint"
   # 对话配置
   conversation:
     max-history: 10

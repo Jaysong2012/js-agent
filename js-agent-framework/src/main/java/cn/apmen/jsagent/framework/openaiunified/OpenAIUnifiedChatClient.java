@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -54,9 +55,13 @@ public class OpenAIUnifiedChatClient {
                     try {
                         log.debug("Received response: {}", objectMapper.writeValueAsString(response));
                     } catch (JsonProcessingException e) {
+                        log.warn("Failed to serialize response for logging", e);
                     }
                 })
-                .doOnError(error -> log.error("Error calling OpenAI API: {}", error.getMessage()));
+                .doOnError(error -> {
+                    log.error("Error calling OpenAI API: {}", error.getMessage());
+                    logDetailedError(error, request);
+                });
     }
 
     /**
@@ -78,12 +83,77 @@ public class OpenAIUnifiedChatClient {
                 .filter(line -> line != null && !line.trim().isEmpty())
                 .filter(line -> !"[DONE]".equals(line.trim())) // 过滤结束标记
                 .doOnNext(data -> log.debug("Received stream data: {}", data))
-                .doOnError(error -> log.error("Error calling OpenAI Stream API: {}", error.getMessage()))
+                .doOnError(error -> {
+                    log.error("Error calling OpenAI Stream API: {}", error.getMessage());
+                    logDetailedError(error, request);
+                })
                 .doOnComplete(() -> log.debug("Stream completed"))
                 .onErrorResume(throwable -> {
                     log.error("Stream error, attempting to recover: {}", throwable.getMessage());
+                    logDetailedError(throwable, request);
                     return Flux.empty();
                 });
+    }
+
+    /**
+     * 记录详细的错误信息
+     */
+    private void logDetailedError(Throwable error, ChatCompletionRequest request) {
+        try {
+            log.error("=== 详细错误信息 ===");
+            log.error("请求URL: {}/chat/completions", baseUrl);
+            log.error("错误类型: {}", error.getClass().getSimpleName());
+            log.error("错误消息: {}", error.getMessage());
+
+            // 记录请求信息
+            if (request != null) {
+                log.error("请求模型: {}", request.getModel());
+                log.error("请求消息数量: {}", request.getMessages() != null ? request.getMessages().size() : 0);
+                log.error("工具数量: {}", request.getTools() != null ? request.getTools().size() : 0);
+
+                // 记录完整请求体（敏感信息已脱敏）
+                try {
+                    String requestJson = objectMapper.writeValueAsString(request);
+                    // 脱敏处理：隐藏API密钥等敏感信息
+                    String sanitizedRequest = requestJson.replaceAll("\"api[_-]?key\"\\s*:\\s*\"[^\"]+\"", "\"api_key\":\"***\"");
+                    log.error("请求体: {}", sanitizedRequest);
+                } catch (JsonProcessingException e) {
+                    log.error("无法序列化请求体: {}", e.getMessage());
+                }
+            }
+
+            // 如果是WebClientResponseException，记录响应详情
+            if (error instanceof WebClientResponseException) {
+                WebClientResponseException webError = (WebClientResponseException) error;
+                log.error("HTTP状态码: {}", webError.getStatusCode());
+                log.error("HTTP状态文本: {}", webError.getStatusText());
+                log.error("响应头: {}", webError.getHeaders());
+                log.error("响应体: {}", webError.getResponseBodyAsString());
+
+                // 尝试解析错误响应
+                try {
+                    String responseBody = webError.getResponseBodyAsString();
+                    if (responseBody != null && !responseBody.isEmpty()) {
+                        log.error("原始响应体: {}", responseBody);
+                        // 如果是JSON格式，尝试格式化
+                        if (responseBody.trim().startsWith("{")) {
+                            Object jsonObject = objectMapper.readValue(responseBody, Object.class);
+                            String formattedJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(jsonObject);
+                            log.error("格式化响应体: {}", formattedJson);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("解析响应体失败: {}", e.getMessage());
+                }
+            }
+
+            // 记录堆栈跟踪
+            log.error("堆栈跟踪:", error);
+            log.error("=== 错误信息结束 ===");
+
+        } catch (Exception e) {
+            log.error("记录详细错误信息时发生异常: {}", e.getMessage(), e);
+        }
     }
 
     /**
