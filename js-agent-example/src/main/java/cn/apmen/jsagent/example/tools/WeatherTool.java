@@ -1,11 +1,9 @@
 package cn.apmen.jsagent.example.tools;
 
-import cn.apmen.jsagent.framework.tool.ToolExecutor;
+import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
+import cn.apmen.jsagent.framework.tool.AbstractToolExecutor;
 import cn.apmen.jsagent.framework.tool.ToolContext;
 import cn.apmen.jsagent.framework.tool.ToolResult;
-import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -19,9 +17,8 @@ import java.util.Random;
  */
 @Component
 @Slf4j
-public class WeatherTool implements ToolExecutor {
+public class WeatherTool extends AbstractToolExecutor {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
     private final Random random = new Random();
     
     // 模拟天气数据
@@ -47,32 +44,46 @@ public class WeatherTool implements ToolExecutor {
     }
 
     @Override
-    public Mono<ToolResult> execute(ToolCall toolCall, ToolContext context) {
-        try {
-            // 解析参数
-            String argumentsJson = toolCall.getFunction().getArguments();
-            JsonNode arguments = objectMapper.readTree(argumentsJson);
+    public Map<String, Object> getParametersDefinition() {
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("type", "object");
             
-            String city = arguments.get("city").asText();
-            log.info("查询城市天气: {}", city);
+        Map<String, Object> properties = new HashMap<>();
             
-            // 模拟天气查询
-            String weather = getWeatherForCity(city);
-            int temperature = 15 + random.nextInt(20); // 15-35度随机温度
+        // city 参数定义
+        Map<String, Object> cityProperty = new HashMap<>();
+        cityProperty.put("type", "string");
+        cityProperty.put("description", "要查询天气的城市名称，例如：北京、上海、广州");
+        properties.put("city", cityProperty);
             
-            String weatherReport = String.format(
-                "城市: %s\n天气: %s\n温度: %d°C\n湿度: %d%%\n风力: %d级",
-                city, weather, temperature, 
-                40 + random.nextInt(40), // 40-80%湿度
-                1 + random.nextInt(5)    // 1-5级风力
-            );
+        parameters.put("properties", properties);
+        parameters.put("required", new String[]{"city"});
             
-            return Mono.just(ToolResult.success(toolCall.getId(), weatherReport));
+        return parameters;
+    }
             
-        } catch (Exception e) {
-            log.error("天气查询工具执行失败", e);
-            return Mono.just(ToolResult.error(toolCall.getId(), "天气查询失败: " + e.getMessage()));
-        }
+    @Override
+    public String[] getRequiredParameters() {
+        return new String[]{"city"};
+    }
+
+    @Override
+    protected Mono<ToolResult> doExecute(ToolCall toolCall, ToolContext context, Map<String, Object> arguments) {
+        String city = getStringParameter(arguments, "city");
+        log.info("查询城市天气: {}", city);
+
+        // 模拟天气查询
+        String weather = getWeatherForCity(city);
+        int temperature = 15 + random.nextInt(20); // 15-35度随机温度
+
+        String weatherReport = String.format(
+            "城市: %s\n天气: %s\n温度: %d°C\n湿度: %d%%\n风力: %d级",
+            city, weather, temperature,
+            40 + random.nextInt(40), // 40-80%湿度
+            1 + random.nextInt(5)    // 1-5级风力
+        );
+
+        return Mono.just(success(toolCall.getId(), weatherReport));
     }
 
     /**

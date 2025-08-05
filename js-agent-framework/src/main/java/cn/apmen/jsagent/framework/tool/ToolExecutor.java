@@ -5,18 +5,10 @@ import reactor.core.publisher.Mono;
 
 /**
  * 工具执行器接口
- * 定义工具的执行能力
+ * 定义工具的执行能力，同时继承工具定义能力
  */
-public interface ToolExecutor {
+public interface ToolExecutor extends ToolDefinition {
 
-    /**
-     * 获取工具名称
-     */
-    String getToolName();
-    /**
-     * 获取工具描述
-     */
-    String getDescription();
     /**
      * 执行工具调用
      * @param toolCall 工具调用信息
@@ -24,6 +16,7 @@ public interface ToolExecutor {
      * @return 执行结果
      */
     Mono<ToolResult> execute(ToolCall toolCall, ToolContext context);
+
     /**
      * 检查是否支持指定的工具调用
      * @param toolCall 工具调用信息

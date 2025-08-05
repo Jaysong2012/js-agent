@@ -1,23 +1,31 @@
 package cn.apmen.jsagent.example.tools;
 
-import cn.apmen.jsagent.framework.tool.ToolExecutor;
+import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
+import cn.apmen.jsagent.framework.tool.AbstractToolExecutor;
 import cn.apmen.jsagent.framework.tool.ToolContext;
 import cn.apmen.jsagent.framework.tool.ToolResult;
-import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+
+import javax.script.ScriptEngine;
+import javax.script.ScriptEngineManager;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 计算器工具 - 支持基本的数学运算
  */
 @Component
 @Slf4j
-public class CalculatorTool implements ToolExecutor {
+public class CalculatorTool extends AbstractToolExecutor {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ScriptEngine scriptEngine;
+
+    public CalculatorTool() {
+        ScriptEngineManager manager = new ScriptEngineManager();
+        this.scriptEngine = manager.getEngineByName("JavaScript");
+    }
 
     @Override
     public String getToolName() {
@@ -30,58 +38,61 @@ public class CalculatorTool implements ToolExecutor {
     }
 
     @Override
-    public Mono<ToolResult> execute(ToolCall toolCall, ToolContext context) {
+    public Map<String, Object> getParametersDefinition() {
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("type", "object");
+            
+        Map<String, Object> properties = new HashMap<>();
+            
+        // expression 参数定义
+        Map<String, Object> expressionProperty = new HashMap<>();
+        expressionProperty.put("type", "string");
+        expressionProperty.put("description", "要计算的数学表达式，例如：25+17, 100/4, 50*2");
+        properties.put("expression", expressionProperty);
+
+        parameters.put("properties", properties);
+        parameters.put("required", new String[]{"expression"});
+
+        return parameters;
+    }
+
+    @Override
+    public String[] getRequiredParameters() {
+        return new String[]{"expression"};
+    }
+
+    @Override
+    protected Mono<ToolResult> doExecute(ToolCall toolCall, ToolContext context, Map<String, Object> arguments) {
+        String expression = getStringParameter(arguments, "expression");
+        log.info("计算表达式: {}", expression);
+
         try {
-            // 解析参数
-            String argumentsJson = toolCall.getFunction().getArguments();
-            JsonNode arguments = objectMapper.readTree(argumentsJson);
-            
-            String expression = arguments.get("expression").asText();
-            log.info("计算表达式: {}", expression);
-            
             // 执行计算
             double result = evaluateExpression(expression);
-            
             String resultMessage = String.format("计算结果: %s = %.2f", expression, result);
             
-            return Mono.just(ToolResult.success(toolCall.getId(), resultMessage));
+            return Mono.just(success(toolCall.getId(), resultMessage));
             
         } catch (Exception e) {
             log.error("计算器工具执行失败", e);
-            return Mono.just(ToolResult.error(toolCall.getId(), "计算失败: " + e.getMessage()));
+            return Mono.just(error(toolCall.getId(), "计算失败: " + e.getMessage()));
         }
     }
 
     /**
-     * 简单的表达式计算器
-     * 支持基本的四则运算
+     * 执行数学表达式计算
      */
-    private double evaluateExpression(String expression) {
-        // 移除空格
-        expression = expression.replaceAll("\\s+", "");
-        
-        // 简单的计算逻辑 - 这里只是示例，实际应用中可以使用更复杂的表达式解析器
-        if (expression.contains("+")) {
-            String[] parts = expression.split("\\+");
-            return Double.parseDouble(parts[0]) + Double.parseDouble(parts[1]);
-        } else if (expression.contains("-")) {
-            String[] parts = expression.split("-");
-            if (parts.length == 2) {
-                return Double.parseDouble(parts[0]) - Double.parseDouble(parts[1]);
-            }
-        } else if (expression.contains("*")) {
-            String[] parts = expression.split("\\*");
-            return Double.parseDouble(parts[0]) * Double.parseDouble(parts[1]);
-        } else if (expression.contains("/")) {
-            String[] parts = expression.split("/");
-            double divisor = Double.parseDouble(parts[1]);
-            if (divisor == 0) {
-                throw new IllegalArgumentException("除数不能为零");
-            }
-            return Double.parseDouble(parts[0]) / divisor;
+    private double evaluateExpression(String expression) throws Exception {
+        // 简单的安全检查，只允许数字和基本运算符
+        if (!expression.matches("[0-9+\\-*/().\\s]+")) {
+            throw new IllegalArgumentException("表达式包含不支持的字符");
         }
         
-        // 如果没有运算符，直接返回数字
-        return Double.parseDouble(expression);
+        Object result = scriptEngine.eval(expression);
+        if (result instanceof Number) {
+            return ((Number) result).doubleValue();
+        } else {
+            throw new IllegalArgumentException("计算结果不是数字");
+        }
     }
 }

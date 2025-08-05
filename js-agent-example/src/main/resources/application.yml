@@ -25,13 +25,13 @@ agent:
     default-max-tokens: 2000
     # OpenAI 统一API 配置
     openai:
-      base-url: "your-openai-base-url"
-      api-key: "your-openai-api-key"
+      base-url: "https://chat.sankuai.com/v1/openai/native"
+      api-key: "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
       timeout: 30s
   mcp:
     bingsearch:
-      url: "your-mcp-bingsearch-url"
-      sse-endpoint: "your-mcp-bingsearch-sse-endpoint"
+      url: "http://mcphub-server.sankuai.com"
+      sse-endpoint: "/mcphub-api/d3a922e1479a4d"
   # 对话配置
   conversation:
     max-history: 10

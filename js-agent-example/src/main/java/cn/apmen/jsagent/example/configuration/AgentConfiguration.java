@@ -9,29 +9,24 @@ import cn.apmen.jsagent.framework.core.CoreAgent;
 import cn.apmen.jsagent.framework.llm.LlmConfig;
 import cn.apmen.jsagent.framework.mcp.MCPTool;
 import cn.apmen.jsagent.framework.openaiunified.OpenAIUnifiedChatClient;
-import cn.apmen.jsagent.framework.openaiunified.model.request.Function;
-import cn.apmen.jsagent.framework.openaiunified.model.request.Tool;
 import cn.apmen.jsagent.framework.tool.AgentTool;
 import cn.apmen.jsagent.framework.tool.ToolRegistry;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import cn.apmen.jsagent.example.tools.CalculatorTool;
+import cn.apmen.jsagent.example.tools.WeatherTool;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
- * Agent框架配置类
+ * Agent框架配置类 - 使用新的工具设计模式
  */
 @Slf4j
 @Configuration
@@ -115,14 +110,6 @@ public class AgentConfiguration {
      */
     @Bean
     public AgentTool mathExpertAgentTool(WorkerAgent mathExpertAgent) {
-        // 定义Tool结构
-        Tool toolDefinition = new Tool();
-        toolDefinition.setType("function");
-
-        Function function = new Function();
-        function.setName("call_math_expert");
-        function.setDescription("调用数学专家来解决复杂的数学问题，会直接向用户提供详细的解答");
-
         // 定义参数结构
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("type", "object");
@@ -134,13 +121,17 @@ public class AgentConfiguration {
         properties.put("problem", problemParam);
 
         parameters.put("properties", properties);
-        parameters.put("required", Arrays.asList("problem"));
-
-        function.setParameters(parameters);
-        toolDefinition.setFunction(function);
+        parameters.put("required", new String[]{"problem"});
 
         // 创建AgentTool，设置directOutput=true，直接输出给用户
-        return new AgentTool(toolDefinition, mathExpertAgent, true);
+        return new AgentTool(
+            "call_math_expert",
+            "调用数学专家来解决复杂的数学问题，会直接向用户提供详细的解答",
+            parameters,
+            new String[]{"problem"},
+            mathExpertAgent,
+            true
+        );
     }
 
     /**
@@ -148,14 +139,6 @@ public class AgentConfiguration {
      */
     @Bean
     public AgentTool writingAssistantAgentTool(WorkerAgent writingAssistantAgent) {
-        // 定义Tool结构
-        Tool toolDefinition = new Tool();
-        toolDefinition.setType("function");
-
-        Function function = new Function();
-        function.setName("call_writing_assistant");
-        function.setDescription("调用写作助手来帮助创作文本内容，结果会返回给主助手进行进一步处理");
-
         // 定义参数结构
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("type", "object");
@@ -173,13 +156,17 @@ public class AgentConfiguration {
         properties.put("content", contentParam);
 
         parameters.put("properties", properties);
-        parameters.put("required", Arrays.asList("task", "content"));
-
-        function.setParameters(parameters);
-        toolDefinition.setFunction(function);
+        parameters.put("required", new String[]{"task", "content"});
 
         // 创建AgentTool，设置directOutput=false，不直接输出给用户
-        return new AgentTool(toolDefinition, writingAssistantAgent, false);
+        return new AgentTool(
+            "call_writing_assistant",
+            "调用写作助手来帮助创作文本内容，结果会返回给主助手进行进一步处理",
+            parameters,
+            new String[]{"task", "content"},
+            writingAssistantAgent,
+            false
+        );
     }
 
     /**
@@ -223,14 +210,6 @@ public class AgentConfiguration {
      */
     @Bean
     public MCPTool bingSearchMCPTool(McpSyncClient bingSearchMCPClient) {
-        // 定义Tool结构
-        Tool toolDefinition = new Tool();
-        toolDefinition.setType("function");
-
-        Function function = new Function();
-        function.setName("bing_search");
-        function.setDescription("Bing网页搜索接口，返回json数据。资源包含网页的url和摘要，不包含完整信息。如果需要完整的信息，is_fast参数应该设置为false。");
-
         // 定义参数结构
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("type", "object");
@@ -246,7 +225,7 @@ public class AgentConfiguration {
         // top_k参数
         Map<String, Object> topKParam = new HashMap<>();
         topKParam.put("type", "integer");
-        topKParam.put("description", "返回的结果数量，最多是10条，默认是3条。");
+        topKParam.put("description", "返回的结果数量，最多是10条，默认是3条");
         topKParam.put("default", 3);
         topKParam.put("minimum", 1);
         topKParam.put("maximum", 10);
@@ -260,109 +239,50 @@ public class AgentConfiguration {
         properties.put("is_fast", isFastParam);
 
         parameters.put("properties", properties);
-        parameters.put("required", Arrays.asList("query", "top_k", "is_fast"));
+        parameters.put("required", new String[]{"query", "top_k", "is_fast"});
 
-        function.setParameters(parameters);
-        toolDefinition.setFunction(function);
-
-        // 创建MCPTool，directOutput=true表示直接输出给用户
-        return new MCPTool(toolDefinition, bingSearchMCPClient, "bing_search", true);
+        // 创建MCPTool，设置directOutput=true，直接输出给用户
+        return new MCPTool(
+                "bing_search",
+                "Bing网页搜索接口，返回json数据。资源包含网页的url和摘要，不包含完整信息。如果需要完整的信息，is_fast参数应该设置为false。",
+                parameters,
+                new String[]{"query", "top_k", "is_fast"},
+                bingSearchMCPClient,
+                "bing_search",
+                true
+        );
     }
 
     /**
-     * 配置工具定义列表
+     * 初始化工具注册
      */
     @Bean
-    public List<Tool> toolDefinitions(AgentTool mathExpertAgentTool,
-                                     AgentTool writingAssistantAgentTool,
-                                     MCPTool bingSearchMCPTool,
-                                     @Autowired(required = false) MCPTool fileReadMCPTool,
-                                     @Autowired(required = false) MCPTool fileWriteMCPTool,
-                                     @Autowired(required = false) MCPTool dbQueryMCPTool) {
-        ObjectMapper objectMapper = new ObjectMapper();
+    public String initializeTools(ToolRegistry toolRegistry,
+                                 CalculatorTool calculatorTool,
+                                 WeatherTool weatherTool,
+                                 AgentTool mathExpertAgentTool,
+                                 AgentTool writingAssistantAgentTool, MCPTool bingSearchMCPTool) {
 
-        // 计算器工具定义
-        Map<String, Object> calculatorProperties = new HashMap<>();
-        Map<String, Object> expressionProperty = new HashMap<>();
-        expressionProperty.put("type", "string");
-        expressionProperty.put("description", "要计算的数学表达式，例如：25+17, 100/4, 50*2");
-        calculatorProperties.put("expression", expressionProperty);
-        Map<String, Object> calculatorParameters = new HashMap<>();
-        calculatorParameters.put("type", "object");
-        calculatorParameters.put("properties", calculatorProperties);
-        calculatorParameters.put("required", Arrays.asList("expression"));
-        Function calculatorFunction = new Function();
-        calculatorFunction.setName("calculator");
-        calculatorFunction.setDescription("执行基本的数学运算，支持加减乘除");
-        calculatorFunction.setParameters(calculatorParameters);
-        Tool calculatorTool = new Tool();
-        calculatorTool.setType("function");
-        calculatorTool.setFunction(calculatorFunction);
+        log.info("开始注册工具到ToolRegistry...");
 
-        // 天气查询工具定义
-        Map<String, Object> weatherProperties = new HashMap<>();
-        Map<String, Object> cityProperty = new HashMap<>();
-        cityProperty.put("type", "string");
-        cityProperty.put("description", "要查询天气的城市名称，例如：北京、上海、广州");
-        weatherProperties.put("city", cityProperty);
-        Map<String, Object> weatherParameters = new HashMap<>();
-        weatherParameters.put("type", "object");
-        weatherParameters.put("properties", weatherProperties);
-        weatherParameters.put("required", Arrays.asList("city"));
-        Function weatherFunction = new Function();
-        weatherFunction.setName("weather_query");
-        weatherFunction.setDescription("查询指定城市的天气情况");
-        weatherFunction.setParameters(weatherParameters);
-        Tool weatherTool = new Tool();
-        weatherTool.setType("function");
-        weatherTool.setFunction(weatherFunction);
+        // 注册基础工具
+        toolRegistry.registerExecutor(calculatorTool);
+        toolRegistry.registerExecutor(weatherTool);
 
-        // 为AgentTool创建纯净的Tool定义（不包含额外字段）
-        Tool mathExpertToolDef = new Tool();
-        mathExpertToolDef.setType(mathExpertAgentTool.getType());
-        mathExpertToolDef.setFunction(mathExpertAgentTool.getFunction());
+        // 注册Agent工具
+        toolRegistry.registerExecutor(mathExpertAgentTool);
+        toolRegistry.registerExecutor(writingAssistantAgentTool);
 
-        Tool writingAssistantToolDef = new Tool();
-        writingAssistantToolDef.setType(writingAssistantAgentTool.getType());
-        writingAssistantToolDef.setFunction(writingAssistantAgentTool.getFunction());
+        // 注册MCP工具
+        toolRegistry.registerExecutor(bingSearchMCPTool);
 
-        // 为Bing搜索MCPTool创建纯净的Tool定义
-        Tool bingSearchToolDef = new Tool();
-        bingSearchToolDef.setType(bingSearchMCPTool.getType());
-        bingSearchToolDef.setFunction(bingSearchMCPTool.getFunction());
+        log.info("工具注册完成，共注册 {} 个工具", toolRegistry.getToolCount());
 
-        // 创建工具列表
-        List<Tool> tools = new ArrayList<>(Arrays.asList(
-            calculatorTool,
-            weatherTool,
-            mathExpertToolDef,        // 数学专家工具定义（纯净版）
-            writingAssistantToolDef,  // 写作助手工具定义（纯净版）
-            bingSearchToolDef         // Bing搜索工具定义（纯净版）
-        ));
+        // 打印工具统计信息
+        var stats = toolRegistry.getStatistics();
+        log.info("工具统计信息: {}", stats);
 
-        // 为其他MCPTool创建纯净的Tool定义（如果存在的话）
-//        if (fileReadMCPTool != null) {
-//            Tool fileReadToolDef = new Tool();
-//            fileReadToolDef.setType(fileReadMCPTool.getType());
-//            fileReadToolDef.setFunction(fileReadMCPTool.getFunction());
-//            tools.add(fileReadToolDef);
-//        }
-//
-//        if (fileWriteMCPTool != null) {
-//            Tool fileWriteToolDef = new Tool();
-//            fileWriteToolDef.setType(fileWriteMCPTool.getType());
-//            fileWriteToolDef.setFunction(fileWriteMCPTool.getFunction());
-//            tools.add(fileWriteToolDef);
-//        }
-//
-//        if (dbQueryMCPTool != null) {
-//            Tool dbQueryToolDef = new Tool();
-//            dbQueryToolDef.setType(dbQueryMCPTool.getType());
-//            dbQueryToolDef.setFunction(dbQueryMCPTool.getFunction());
-//            tools.add(dbQueryToolDef);
-//        }
-
-        return tools;
+        return "tools-initialized";
     }
 
     /**
@@ -372,42 +292,22 @@ public class AgentConfiguration {
     public CoreAgent coreAgent(OpenAIUnifiedChatClient openAIClient,
                               ToolRegistry toolRegistry,
                               LlmConfig llmConfig,
-                              List<Tool> toolDefinitions,
-                              AgentTool mathExpertAgentTool,
-                              AgentTool writingAssistantAgentTool,
-                              MCPTool bingSearchMCPTool,
-                              @Autowired(required = false) MCPTool fileReadMCPTool,
-                              @Autowired(required = false) MCPTool fileWriteMCPTool,
-                              @Autowired(required = false) MCPTool dbQueryMCPTool) {
-
-        // 将AgentTool注册到ToolRegistry
-        toolRegistry.registerExecutor(mathExpertAgentTool);
-        toolRegistry.registerExecutor(writingAssistantAgentTool);
-
-        // 将MCPTool注册到ToolRegistry
-        toolRegistry.registerExecutor(bingSearchMCPTool);
-        // 将其他MCPTool注册到ToolRegistry（如果存在的话）
-//        if (fileReadMCPTool != null) {
-//            toolRegistry.registerExecutor(fileReadMCPTool);
-//        }
-//        if (fileWriteMCPTool != null) {
-//            toolRegistry.registerExecutor(fileWriteMCPTool);
-//        }
-//        if (dbQueryMCPTool != null) {
-//            toolRegistry.registerExecutor(dbQueryMCPTool);
-//        }
+                              String initializeTools) { // 依赖工具初始化完成
 
         return CoreAgent.builder()
                 .id("main-agent")
                 .name("主要助手")
-                .description("一个智能助手，可以帮助用户解决各种问题，包括数学计算、天气查询、网络搜索、文件操作和数据库查询，还可以调用专业的数学专家和写作助手")
+                .description("一个智能助手，可以帮助用户解决各种问题，包括数学计算、天气查询、还可以调用专业的数学专家和写作助手")
                 .openAIUnifiedChatClient(openAIClient)
                 .toolRegistry(toolRegistry)
                 .llmConfig(llmConfig)
-                .tools(toolDefinitions)
+                .tools(toolRegistry.getAllTools()) // 直接从ToolRegistry获取所有工具
                 .build();
     }
 
+    /**
+     * 配置Agent配置
+     */
     @Bean
     public AgentConfig agentConfig() {
         AgentConfig agentConfig = new AgentConfig();
@@ -415,8 +315,13 @@ public class AgentConfiguration {
         return agentConfig;
     }
 
+    /**
+     * 配置Agent运行器
+     */
     @Bean
-    public AgentRunner agentRunner(CoreAgent coreAgent, AgentConfig agentConfig, ConversationService conversationService) {
+    public AgentRunner agentRunner(CoreAgent coreAgent,
+                                  AgentConfig agentConfig,
+                                  ConversationService conversationService) {
         return new AgentRunner(coreAgent, agentConfig, conversationService);
     }
 }
