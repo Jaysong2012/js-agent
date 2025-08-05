@@ -42,14 +42,13 @@ public class ContextBuilder {
                     .conversationService(conversationService)
                     .userId(request.getUserId())
                     .conversationId(request.getConversationId())
-                    .systemPrompt(buildSystemPrompt())
-                    .executionContext(executionContext);
+                    .systemPrompt(buildSystemPrompt());
             // 添加用户消息到本地历史
             List<Message> messageHistory = Collections.synchronizedList(new ArrayList<>());
             if (request.getMessage() != null && request.getMessage().getMessage() != null) {
                 messageHistory.add(new Message("user", request.getMessage().getMessage()));
             }
-            builder.localMessageHistory(messageHistory);
+
             RunnerContext context = builder.build();
             // 验证构建的上下文
             validateContext(context);

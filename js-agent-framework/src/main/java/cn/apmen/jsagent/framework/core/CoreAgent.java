@@ -3,6 +3,7 @@ package cn.apmen.jsagent.framework.core;
 import cn.apmen.jsagent.framework.exception.AgentException;
 import cn.apmen.jsagent.framework.exception.ErrorCode;
 import cn.apmen.jsagent.framework.llm.LlmConfig;
+import cn.apmen.jsagent.framework.memory.MemoryService;
 import cn.apmen.jsagent.framework.openaiunified.OpenAIUnifiedChatClient;
 import cn.apmen.jsagent.framework.openaiunified.model.request.ChatCompletionRequest;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;

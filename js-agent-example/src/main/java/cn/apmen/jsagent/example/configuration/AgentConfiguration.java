@@ -8,6 +8,8 @@ import cn.apmen.jsagent.framework.core.AgentRunner;
 import cn.apmen.jsagent.framework.core.CoreAgent;
 import cn.apmen.jsagent.framework.llm.LlmConfig;
 import cn.apmen.jsagent.framework.mcp.MCPTool;
+import cn.apmen.jsagent.framework.memory.InMemoryMemoryService;
+import cn.apmen.jsagent.framework.memory.MemoryService;
 import cn.apmen.jsagent.framework.openaiunified.OpenAIUnifiedChatClient;
 import cn.apmen.jsagent.framework.tool.AgentTool;
 import cn.apmen.jsagent.framework.tool.ToolRegistry;
@@ -65,6 +67,11 @@ public class AgentConfiguration {
     @Bean
     public ConversationService conversationService() {
         return new InMemoryConversationService();
+    }
+
+    @Bean
+    public MemoryService memoryService() {
+        return new InMemoryMemoryService();
     }
 
     /**
@@ -248,8 +255,7 @@ public class AgentConfiguration {
                 parameters,
                 new String[]{"query", "top_k", "is_fast"},
                 bingSearchMCPClient,
-                "bing_search",
-                true
+                "bing_search"
         );
     }
 
@@ -321,7 +327,8 @@ public class AgentConfiguration {
     @Bean
     public AgentRunner agentRunner(CoreAgent coreAgent,
                                   AgentConfig agentConfig,
-                                  ConversationService conversationService) {
-        return new AgentRunner(coreAgent, agentConfig, conversationService);
+                                  ConversationService conversationService,
+                                  MemoryService memoryService) {
+        return new AgentRunner(coreAgent, agentConfig, conversationService, memoryService);
     }
 }

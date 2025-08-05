@@ -36,8 +36,6 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     private final McpSyncClient mcpClient;
     // MCP工具名称
     private final String mcpToolName;
-    // 是否直接输出给用户
-    private final boolean directOutput;
     // 工具名称
     private final String toolName;
     // 工具描述
@@ -61,30 +59,19 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
      * @param requiredParameters 必需参数
      * @param mcpClient MCP客户端
      * @param mcpToolName MCP工具名称
-     * @param directOutput 是否直接输出给用户
      */
     public MCPTool(String toolName, String description,
                    Map<String, Object> parametersDefinition,
                    String[] requiredParameters,
-                   McpSyncClient mcpClient, String mcpToolName, boolean directOutput) {
+                   McpSyncClient mcpClient, String mcpToolName) {
         this.toolName = toolName;
         this.description = description;
         this.parametersDefinition = new HashMap<>(parametersDefinition);
         this.requiredParameters = requiredParameters != null ? requiredParameters.clone() : new String[0];
         this.mcpClient = mcpClient;
         this.mcpToolName = mcpToolName;
-        this.directOutput = directOutput;
     }
 
-    /**
-     * 构造函数 - 默认不直接输出
-     */
-    public MCPTool(String toolName, String description,
-                   Map<String, Object> parametersDefinition,
-                   String[] requiredParameters,
-                   McpSyncClient mcpClient, String mcpToolName) {
-        this(toolName, description, parametersDefinition, requiredParameters, mcpClient, mcpToolName, false);
-    }
 
     /**
      * 便捷构造函数 - 创建标准的MCP工具
@@ -92,18 +79,17 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
      * @param description 工具描述
      * @param mcpClient MCP客户端
      * @param mcpToolName MCP工具名称
-     * @param directOutput 是否直接输出
      * @return MCPTool实例
      */
     public static MCPTool createStandardMCPTool(String toolName, String description,
-                                               McpSyncClient mcpClient, String mcpToolName, boolean directOutput) {
+                                               McpSyncClient mcpClient, String mcpToolName) {
         // 创建通用的参数定义
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("type", "object");
         parameters.put("properties", new HashMap<>());
         parameters.put("required", new String[0]);
 
-        return new MCPTool(toolName, description, parameters, new String[0], mcpClient, mcpToolName, directOutput);
+        return new MCPTool(toolName, description, parameters, new String[0], mcpClient, mcpToolName);
     }
 
     @Override
@@ -170,16 +156,7 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
                 String content = extractContent(result);
                 log.debug("MCP工具返回内容长度: {}", content != null ? content.length() : 0);
 
-                if (directOutput) {
-                    // 直接输出给用户的响应
-                    MCPToolResponse mcpResponse = MCPToolResponse.success(
-                        toolCallId, mcpToolName, content)
-                        .withDirectOutput();
-                    return createSpecialToolResult(mcpResponse);
-                } else {
-                    // 普通响应
-                    return success(toolCallId, content);
-                }
+                return success(toolCallId, content);
             } catch (Exception e) {
                 log.error("MCP工具调用异常: {}, 错误类型: {}, 错误消息: {}",
                     mcpToolName, e.getClass().getSimpleName(), e.getMessage());
@@ -229,21 +206,14 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
                 return Flux.just(MCPToolResponse.error(toolCall.getId(), "Invalid parameters"));
             }
 
-            log.debug("MCPTool directOutput={}, calling MCP tool {} with args: {}", directOutput, mcpToolName, arguments);
+            log.debug("MCPTool directOutput={}, calling MCP tool  with args: {}", mcpToolName, arguments);
 
             // 1. 先输出判定片段
-            MCPToolResponse judge = MCPToolResponse.createDecisionFragment(toolCall.getId(), directOutput);
+            MCPToolResponse judge = MCPToolResponse.createDecisionFragment(toolCall.getId());
 
             // 2. 再输出实际内容 - 调用MCP工具的流式方法
             Flux<MCPToolResponse> contentFlux = callMCPToolStream(toolCall.getId(), arguments)
                 .doOnNext(response -> log.debug("MCP tool {} response: {}", mcpToolName, response.getContent()))
-                .map(response -> {
-                    if (directOutput) {
-                        response.setDirectOutput(true);
-                        log.debug("Setting directOutput=true for stream content: {}", response.getContent());
-                    }
-                    return response;
-                })
                 .onErrorMap(this::mapToAgentException)
                 .onErrorReturn(MCPToolResponse.error(toolCall.getId(), "MCP stream call failed"));
 
@@ -312,20 +282,6 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     }
 
     /**
-     * 创建特殊的ToolResult，用于标识直接输出
-     */
-    private ToolResult createSpecialToolResult(MCPToolResponse response) {
-        try {
-            // 直接返回 JSON 格式的 MCPToolResponse，不需要特殊标记
-            String jsonContent = objectMapper.writeValueAsString(response);
-            return ToolResult.success(response.getToolCallId(), jsonContent);
-        } catch (Exception e) {
-            log.error("Failed to serialize MCPToolResponse", e);
-            return ToolResult.error(response.getToolCallId(), "Failed to create special tool result");
-        }
-    }
-
-    /**
      * 将异常映射为AgentException
      */
     private Throwable mapToAgentException(Throwable throwable) {
@@ -366,10 +322,4 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
         return mcpToolName;
     }
 
-    /**
-     * 是否直接输出给用户
-     */
-    public boolean isDirectOutput() {
-        return directOutput;
-    }
 }

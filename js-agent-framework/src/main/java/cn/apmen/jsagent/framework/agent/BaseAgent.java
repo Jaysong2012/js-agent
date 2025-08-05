@@ -5,7 +5,7 @@ import cn.apmen.jsagent.framework.core.AgentResponse;
 import cn.apmen.jsagent.framework.enums.AgentStateEnum;
 import cn.apmen.jsagent.framework.exception.AgentException;
 import cn.apmen.jsagent.framework.exception.ErrorCode;
-import cn.apmen.jsagent.framework.memory.MemoryService;
+import cn.apmen.jsagent.framework.memory.AgentMemoryService;
 import cn.apmen.jsagent.framework.memory.MemoryStats;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import lombok.extern.slf4j.Slf4j;
@@ -30,14 +30,14 @@ public abstract class BaseAgent implements Agent {
     protected AgentStateEnum state = AgentStateEnum.IDLE;
 
     // Memory管理相关
-    protected MemoryService memoryService;
+    protected AgentMemoryService memoryService;
     protected String sessionId;
     protected int maxContextTokens = 4000; // 默认上下文token限制
 
     /**
      * 设置记忆服务
      */
-    public void setMemoryService(MemoryService memoryService) {
+    public void setMemoryService(AgentMemoryService memoryService) {
         this.memoryService = memoryService;
     }
 

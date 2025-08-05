@@ -7,7 +7,7 @@ import cn.apmen.jsagent.framework.core.ContextInformation.EnvironmentInformation
 import cn.apmen.jsagent.framework.core.ContextInformation.UserInformation;
 import cn.apmen.jsagent.framework.exception.AgentException;
 import cn.apmen.jsagent.framework.exception.ErrorCode;
-import cn.apmen.jsagent.framework.execution.ExecutionContext;
+import cn.apmen.jsagent.framework.memory.MemoryService;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
 import cn.apmen.jsagent.framework.protocol.UserChatRequest;
@@ -28,10 +28,10 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -45,6 +45,7 @@ public class AgentRunner {
     private final AgentConfig agentConfig;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConversationService conversationService;
+    private final MemoryService memoryService;
     private final Mustache.Compiler mustacheCompiler = Mustache.compiler();
 
     // 默认系统提示词模板
@@ -82,10 +83,11 @@ public class AgentRunner {
     }
 
     public AgentRunner(CoreAgent agent, AgentConfig agentConfig,
-                       ConversationService conversationService) {
+                       ConversationService conversationService, MemoryService memoryService) {
         this.agent = agent;
         this.agentConfig = agentConfig;
         this.conversationService = conversationService;
+        this.memoryService = memoryService;
     }
 
     /**
@@ -104,7 +106,7 @@ public class AgentRunner {
                                         // 先添加用户消息到ConversationService
                                         return addUserMessageToConversation(request, context)
                                                 .thenMany(executeStreamLoop(context))
-                                                .flatMap(this::convertToAgentEventStream);
+                                                .flatMap(response -> convertToAgentEventStreamWithConversationRecord(response, context));
                                     }));
                 })
                 .doOnNext(event -> log.debug("Agent event generated: type={}, content={}",
@@ -123,8 +125,15 @@ public class AgentRunner {
         return loadContextInformation(request)
                 .flatMap(contextInfo -> buildRunnerContextWithInfo(request, contextInfo))
                 .flatMap(context -> addUserMessageToConversation(request, context)
-                        .then(executeNonStreamLoop(context)))
-                .map(this::convertToAgentEvent)
+                        .then(executeNonStreamLoop(context))
+                        .doOnNext(response -> {
+                            // 记录完整的TEXT_RESPONSE到ConversationService
+                            if (response.getType() == AgentResponse.ResponseType.TEXT &&
+                                response.getContent() != null && !response.getContent().trim().isEmpty()) {
+                                recordCompleteResponseToConversation(context);
+                            }
+                        })
+                        .map(this::convertToAgentEvent))
                 .doOnNext(event -> log.debug("Agent event generated: {}", event))
                 .onErrorMap(this::mapToAgentException)
                 .onErrorResume(throwable -> Mono.just(createErrorEvent(throwable)));
@@ -253,25 +262,14 @@ public class AgentRunner {
     private Mono<RunnerContext> buildRunnerContextWithInfo(UserChatRequest request, ContextInformation contextInfo) {
         return Mono.fromCallable(() -> {
             try {
-                // 生成执行ID
-                String executionId = UUID.randomUUID().toString();
-
-                // 构建执行上下文
-                ExecutionContext executionContext = ExecutionContext.builder()
-                        .executionId(executionId)
-                        .agentId(agent.getId())
-                        .userId(request.getUserId())
-                        .conversationId(request.getConversationId())
-                        .build();
-
                 // 构建系统提示词
                 String systemPrompt = buildSystemPromptWithContext(contextInfo);
 
                 RunnerContext.RunnerContextBuilder builder = RunnerContext.builder()
-                        .conversationService(conversationService)
+                        .memoryService(memoryService) // 设置MemoryService
+                        .conversationService(conversationService) // 设置ConversationService
                         .userId(request.getUserId())
                         .conversationId(request.getConversationId())
-                        .executionContext(executionContext)
                         .systemPrompt(systemPrompt);
 
                 // 设置上下文token限制
@@ -298,7 +296,7 @@ public class AgentRunner {
                     initializeConversationMetadata(context, contextInfo);
                 }
 
-                log.debug("Built RunnerContext with execution ID: {}", executionId);
+                log.debug("Built RunnerContext for user: {}, conversation: {}", request.getUserId(), request.getConversationId());
                 return context;
 
             } catch (AgentException e) {
@@ -410,7 +408,8 @@ public class AgentRunner {
     }
 
     /**
-     * 添加用户消息到ConversationService
+     * 添加用户消息到上下文
+     * RunnerContext会自动将用户消息记录到ConversationService，所有消息记录到MemoryService
      */
     private Mono<Void> addUserMessageToConversation(UserChatRequest request, RunnerContext context) {
         if (request.getMessage() == null || request.getMessage().getMessage() == null) {
@@ -419,9 +418,12 @@ public class AgentRunner {
 
         Message userMessage = new Message("user", request.getMessage().getMessage());
         
-        // RunnerContext.addMessage 现在已经处理了持久化，直接添加即可
+        // RunnerContext.addMessage 会自动处理：
+        // 1. 用户消息记录到ConversationService
+        // 2. 所有消息记录到MemoryService
+        // 3. 添加到本地缓存用于Agent推理
         context.addMessage(userMessage);
-        log.debug("User message added to conversation: {}", request.getMessage().getMessage());
+        log.debug("User message added to context: {}", request.getMessage().getMessage());
         
         return Mono.empty();
     }
@@ -620,6 +622,9 @@ public class AgentRunner {
                             String content = result.isSuccess() ? result.getContent() : result.getError();
                             context.addToolMessage(result.getToolCallId(), content);
 
+                            // 先输出TOOL_RESULT事件
+                            AgentResponse toolResultResponse = AgentResponse.toolResult(result);
+
                             // 对于 directOutput 的 AgentTool，直接解析并返回内容
                             if (result.isSuccess()) {
                                 try {
@@ -631,8 +636,11 @@ public class AgentRunner {
                                         // 将内容作为助手消息添加到上下文
                                         context.addMessage(new Message("assistant", agentContent));
                                         log.debug("DirectOutput AgentTool content added to context: {}", agentContent);
-                                        // 直接返回TEXT_RESPONSE事件，停止Loop
-                                        return Flux.just(AgentResponse.text(agentContent, true));
+                                        // 返回TOOL_RESULT事件和TEXT_RESPONSE事件，停止Loop
+                                        return Flux.just(
+                                            toolResultResponse,
+                                            AgentResponse.text(agentContent, true)
+                                        );
                                     }
                                 } catch (Exception e) {
                                     log.error("Failed to parse AgentToolResponse", e);
@@ -640,7 +648,8 @@ public class AgentRunner {
                             }
 
                             log.debug("AgentTool with directOutput=true executed, terminating loop");
-                            return Flux.empty();
+                            // 只返回TOOL_RESULT事件
+                            return Flux.just(toolResultResponse);
                         });
             }
         }
@@ -660,11 +669,16 @@ public class AgentRunner {
         return Flux.merge(toolExecutions)
                 .collectList()
                 .flatMapMany(results -> {
-                    // 将所有工具结果成对添加到Message
+                    // 先为每个工具结果生成TOOL_RESULT事件
+                    List<AgentResponse> toolResultResponses = new ArrayList<>();
                     boolean hasSuccessfulToolCall = false;
+
                     for (ToolResult result : results) {
                         String content = result.isSuccess() ? result.getContent() : result.getError();
                         context.addToolMessage(result.getToolCallId(), content);
+
+                        // 生成TOOL_RESULT事件
+                        toolResultResponses.add(AgentResponse.toolResult(result));
 
                         // 记录是否有成功的工具调用
                         if (result.isSuccess()) {
@@ -680,9 +694,10 @@ public class AgentRunner {
                         log.warn("All tool calls failed, not incrementing round. Current round: {}", context.getCurrentRound());
                     }
 
-                    // 触发CoreAgent的思考并继续Loop
-                    log.debug("All tools executed, triggering CoreAgent thinking and continuing loop");
-                    return executeStreamLoop(context);
+                    // 先输出所有TOOL_RESULT事件，然后继续执行循环
+                    log.debug("All tools executed, outputting {} tool results and continuing loop", toolResultResponses.size());
+                    return Flux.fromIterable(toolResultResponses)
+                            .concatWith(executeStreamLoop(context));
                 });
     }
 
@@ -713,6 +728,8 @@ public class AgentRunner {
                 return AgentEvent.textResponse(response.getContent(), response.isFinalResponse());
             case TOOL_CALL:
                 return AgentEvent.toolCall(response.getToolCalls());
+            case TOOL_RESULT:
+                return AgentEvent.toolResult(response.getToolResult());
             case ERROR:
                 return AgentEvent.error(response.getError());
             case THINKING:
@@ -731,6 +748,8 @@ public class AgentRunner {
                 return Flux.just(AgentEvent.textResponse(response.getContent(), response.isFinalResponse()));
             case TOOL_CALL:
                 return Flux.just(AgentEvent.toolCall(response.getToolCalls()));
+            case TOOL_RESULT:
+                return Flux.just(AgentEvent.toolResult(response.getToolResult()));
             case ERROR:
                 return Flux.just(AgentEvent.error(response.getError()));
             case THINKING:
@@ -739,6 +758,76 @@ public class AgentRunner {
                 return Flux.just(AgentEvent.debug(response.getContent()));
             default:
                 return Flux.just(AgentEvent.error("Unknown response type"));
+        }
+    }
+
+    /**
+     * 将AgentResponse转换为AgentEvent，并在最终回复完成时记录到ConversationService
+     */
+    private Flux<AgentEvent> convertToAgentEventStreamWithConversationRecord(AgentResponse response, RunnerContext context) {
+        switch (response.getType()) {
+            case TEXT:
+                // 只有在最终回复完成时才记录到ConversationService
+                if (response.isFinalResponse() && response.getContent() != null && !response.getContent().trim().isEmpty()) {
+                    // 获取完整的助手回复内容（从MemoryService中获取最新的assistant消息）
+                    recordCompleteResponseToConversation(context);
+                }
+                return Flux.just(AgentEvent.textResponse(response.getContent(), response.isFinalResponse()));
+            case TOOL_CALL:
+                return Flux.just(AgentEvent.toolCall(response.getToolCalls()));
+            case TOOL_RESULT:
+                return Flux.just(AgentEvent.toolResult(response.getToolResult()));
+            case ERROR:
+                return Flux.just(AgentEvent.error(response.getError()));
+            case THINKING:
+                return Flux.just(AgentEvent.thinking(response.getContent()));
+            case DEBUG:
+                return Flux.just(AgentEvent.debug(response.getContent()));
+            default:
+                return Flux.just(AgentEvent.error("Unknown response type"));
+        }
+    }
+
+
+    /**
+     * 记录完整的助手回复到ConversationService
+     * 从MemoryService中获取最新的assistant消息并合并为完整回复
+     */
+    private void recordCompleteResponseToConversation(RunnerContext context) {
+        if (context.getMemoryService() != null && context.getConversationId() != null) {
+            // 从MemoryService获取最近的消息，查找最新的assistant消息
+            context.getMemoryService()
+                .getRecentMemory(context.getConversationId(), 10)
+                .subscribe(messages -> {
+                    if (messages != null && !messages.isEmpty()) {
+                        // 从最新的消息开始，收集所有连续的assistant消息
+                        StringBuilder completeResponse = new StringBuilder();
+                        for (int i = messages.size() - 1; i >= 0; i--) {
+                            Message message = messages.get(i);
+                            if ("assistant".equals(message.getRole()) && message.getContent() != null) {
+                                // 将内容添加到开头（因为我们是倒序遍历）
+                                if (completeResponse.length() > 0) {
+                                    completeResponse.insert(0, message.getContent());
+                                } else {
+                                    completeResponse.append(message.getContent());
+                                }
+                            } else if (!"assistant".equals(message.getRole())) {
+                                // 遇到非assistant消息，停止收集
+                                break;
+                            }
+                        }
+
+                        // 记录完整回复到ConversationService
+                        String finalResponse = completeResponse.toString().trim();
+                        if (!finalResponse.isEmpty()) {
+                            context.recordTextResponseToConversation(finalResponse);
+                            log.debug("Recorded complete assistant response to ConversationService: {}",
+                                finalResponse.substring(0, Math.min(100, finalResponse.length())) + "...");
+                        }
+                    }
+                }, error -> {
+                    log.warn("Failed to get recent messages for conversation recording", error);
+                });
         }
     }
 

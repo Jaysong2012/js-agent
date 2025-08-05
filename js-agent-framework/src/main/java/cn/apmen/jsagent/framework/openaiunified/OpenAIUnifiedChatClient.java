@@ -91,7 +91,7 @@ public class OpenAIUnifiedChatClient {
                 .onErrorResume(throwable -> {
                     log.error("Stream error, attempting to recover: {}", throwable.getMessage());
                     logDetailedError(throwable, request);
-                    return Flux.empty();
+                    return Flux.just("思考失败了，我们聊点别的吧");
                 });
     }
 

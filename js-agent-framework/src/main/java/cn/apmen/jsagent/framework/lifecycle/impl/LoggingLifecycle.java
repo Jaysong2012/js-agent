@@ -23,13 +23,8 @@ public class LoggingLifecycle implements AgentLifecycle {
     @Override
     public Mono<Void> onInitialize(RunnerContext context) {
         return Mono.fromRunnable(() -> {
-            log.info("Agent execution initialized - ExecutionId: {}, AgentId: {}, UserId: {}, ConversationId: {}", 
-                context.getExecutionId(), 
-                context.getAgentId(), 
-                context.getUserId(), 
-                context.getConversationId());
             // 记录开始时间
-            context.setExecutionMetadata("startTime", System.currentTimeMillis());
+            //context.setExecutionMetadata("startTime", System.currentTimeMillis());
         });
     }
     @Override
@@ -45,8 +40,8 @@ public class LoggingLifecycle implements AgentLifecycle {
                 context.getCurrentRound(), 
                 response.getType());
             // 更新执行指标
-            if (context.getExecutionMetrics() != null) {
-                context.getExecutionMetrics().incrementLlmCalls();
+            if (context != null) {
+                //context.incrementLlmCalls();
             }
         });
     }
@@ -61,33 +56,33 @@ public class LoggingLifecycle implements AgentLifecycle {
         return Mono.fromRunnable(() -> {
             log.debug("Tool call completed - Round: {}", context.getCurrentRound());
             // 更新执行指标
-            if (context.getExecutionMetrics() != null) {
-                context.getExecutionMetrics().incrementToolCalls();
+            if (context != null) {
+                //context.incrementToolCalls();
             }
         });
     }
     @Override
     public Mono<Void> onComplete(RunnerContext context) {
         return Mono.fromRunnable(() -> {
-            Long startTime = context.getExecutionMetadata("startTime", Long.class);
-            if (startTime != null) {
-                long duration = System.currentTimeMillis() - startTime;
-                log.info("Agent execution completed - ExecutionId: {}, Duration: {}ms, Rounds: {}", 
-                    context.getExecutionId(), 
-                    duration, 
-                    context.getCurrentRound());
-                // 更新执行指标
-                if (context.getExecutionMetrics() != null) {
-                    context.getExecutionMetrics().setExecutionTime(startTime);
-                }
-            }
+//            Long startTime = context.getExecutionMetadata("startTime", Long.class);
+//            if (startTime != null) {
+//                long duration = System.currentTimeMillis() - startTime;
+//                log.info("Agent execution completed - ExecutionId: {}, Duration: {}ms, Rounds: {}",
+//                    context.getExecutionId(),
+//                    duration,
+//                    context.getCurrentRound());
+//                // 更新执行指标
+//                if (context != null) {
+//                    context.setExecutionTime(startTime);
+//                }
+//            }
         });
     }
     @Override
     public Mono<Void> onError(RunnerContext context, Throwable error) {
         return Mono.fromRunnable(() -> {
             log.error("Agent execution failed - ExecutionId: {}, Error: {}", 
-                context.getExecutionId(), 
+                context.getConversationId(), 
                 error.getMessage(), 
                 error);
         });

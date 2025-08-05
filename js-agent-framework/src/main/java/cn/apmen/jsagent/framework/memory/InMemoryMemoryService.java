@@ -15,61 +15,64 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * 基于内存的记忆服务实现
+ * 基于内存的记忆服务实现（基于conversationId）
  * 适用于开发和测试环境
  */
 @Slf4j
 public class InMemoryMemoryService implements MemoryService {
 
-    // 存储结构：agentId -> sessionId -> messages
-    private final Map<String, Map<String, List<Message>>> memoryStore = new ConcurrentHashMap<>();
+    // 存储结构：conversationId -> messages
+    private final Map<String, List<Message>> memoryStore = new ConcurrentHashMap<>();
 
-    // 元数据存储：agentId -> sessionId -> metadata
-    private final Map<String, Map<String, MemoryMetadata>> metadataStore = new ConcurrentHashMap<>();
+    // 元数据存储：conversationId -> metadata
+    private final Map<String, MemoryMetadata> metadataStore = new ConcurrentHashMap<>();
 
     // 默认配置
-    private static final int DEFAULT_SHORT_TERM_LIMIT = 20;
+    private static final int DEFAULT_RECENT_LIMIT = 20;
     private static final int DEFAULT_CONTEXT_TOKEN_LIMIT = 4000;
     private static final int ESTIMATED_TOKENS_PER_MESSAGE = 50; // 粗略估算
 
     @Override
-    public Mono<Void> addMessage(String agentId, String sessionId, Message message) {
+    public Mono<Void> addMessage(String conversationId, Message message) {
         return Mono.fromRunnable(() -> {
-            memoryStore.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>())
-                      .computeIfAbsent(sessionId, k -> Collections.synchronizedList(new ArrayList<>()))
+            memoryStore.computeIfAbsent(conversationId, k -> Collections.synchronizedList(new ArrayList<>()))
                       .add(message);
 
             // 更新元数据
-            updateMetadata(agentId, sessionId);
+            updateMetadata(conversationId);
 
-            log.debug("Added message to memory: agent={}, session={}, role={}",
-                     agentId, sessionId, message.getRole());
+            log.debug("Added message to memory: conversation={}, role={}",
+                     conversationId, message.getRole());
         });
     }
 
     @Override
-    public Mono<Void> addMessages(String agentId, String sessionId, List<Message> messages) {
+    public Mono<Void> addMessages(String conversationId, List<Message> messages) {
         return Mono.fromRunnable(() -> {
             if (messages == null || messages.isEmpty()) {
                 return;
             }
 
-            memoryStore.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>())
-                      .computeIfAbsent(sessionId, k -> Collections.synchronizedList(new ArrayList<>()))
+            memoryStore.computeIfAbsent(conversationId, k -> Collections.synchronizedList(new ArrayList<>()))
                       .addAll(messages);
 
             // 更新元数据
-            updateMetadata(agentId, sessionId);
+            updateMetadata(conversationId);
 
-            log.debug("Added {} messages to memory: agent={}, session={}",
-                     messages.size(), agentId, sessionId);
+            log.debug("Added {} messages to memory: conversation={}",
+                     messages.size(), conversationId);
         });
     }
 
     @Override
-    public Mono<List<Message>> getShortTermMemory(String agentId, String sessionId, int limit) {
+    public Mono<List<Message>> getMemoryHistory(String conversationId) {
+        return Mono.fromCallable(() -> new ArrayList<>(getMessagesForConversation(conversationId)));
+    }
+
+    @Override
+    public Mono<List<Message>> getRecentMemory(String conversationId, int limit) {
         return Mono.fromCallable(() -> {
-            List<Message> messages = getMessagesForSession(agentId, sessionId);
+            List<Message> messages = getMessagesForConversation(conversationId);
             if (messages.isEmpty()) {
                 return new ArrayList<>();
             }
@@ -82,14 +85,9 @@ public class InMemoryMemoryService implements MemoryService {
     }
 
     @Override
-    public Mono<List<Message>> getLongTermMemory(String agentId, String sessionId) {
-        return Mono.fromCallable(() -> new ArrayList<>(getMessagesForSession(agentId, sessionId)));
-    }
-
-    @Override
-    public Mono<List<Message>> getContextMemory(String agentId, String sessionId, int maxTokens, String systemPrompt) {
+    public Mono<List<Message>> getContextMemory(String conversationId, int maxTokens, String systemPrompt) {
         return Mono.fromCallable(() -> {
-            List<Message> messages = getMessagesForSession(agentId, sessionId);
+            List<Message> messages = getMessagesForConversation(conversationId);
             if (messages.isEmpty()) {
                 return new ArrayList<>();
             }
@@ -110,40 +108,23 @@ public class InMemoryMemoryService implements MemoryService {
     }
 
     @Override
-    public Flux<Message> streamMemory(String agentId, String sessionId) {
-        return Flux.fromIterable(getMessagesForSession(agentId, sessionId));
+    public Flux<Message> streamMemoryHistory(String conversationId) {
+        return Flux.fromIterable(getMessagesForConversation(conversationId));
     }
 
     @Override
-    public Mono<Void> clearSessionMemory(String agentId, String sessionId) {
+    public Mono<Void> clearMemory(String conversationId) {
         return Mono.fromRunnable(() -> {
-            Map<String, List<Message>> agentMemory = memoryStore.get(agentId);
-            if (agentMemory != null) {
-                agentMemory.remove(sessionId);
-            }
-
-            Map<String, MemoryMetadata> agentMetadata = metadataStore.get(agentId);
-            if (agentMetadata != null) {
-                agentMetadata.remove(sessionId);
-            }
-
-            log.debug("Cleared session memory: agent={}, session={}", agentId, sessionId);
+            memoryStore.remove(conversationId);
+            metadataStore.remove(conversationId);
+            log.debug("Cleared memory for conversation: {}", conversationId);
         });
     }
 
     @Override
-    public Mono<Void> clearAgentMemory(String agentId) {
-        return Mono.fromRunnable(() -> {
-            memoryStore.remove(agentId);
-            metadataStore.remove(agentId);
-            log.debug("Cleared all memory for agent: {}", agentId);
-        });
-    }
-
-    @Override
-    public Mono<MemoryStats> getMemoryStats(String agentId, String sessionId) {
+    public Mono<MemoryStats> getMemoryStats(String conversationId) {
         return Mono.fromCallable(() -> {
-            List<Message> messages = getMessagesForSession(agentId, sessionId);
+            List<Message> messages = getMessagesForConversation(conversationId);
             if (messages.isEmpty()) {
                 return MemoryStats.builder()
                     .totalMessages(0)
@@ -173,67 +154,52 @@ public class InMemoryMemoryService implements MemoryService {
     }
 
     @Override
-    public Mono<Void> compressMemory(String agentId, String sessionId, int keepRecentCount) {
+    public Mono<Void> compressMemory(String conversationId, int keepRecentCount) {
         return Mono.fromRunnable(() -> {
-            List<Message> messages = getMessagesForSession(agentId, sessionId);
+            List<Message> messages = getMessagesForConversation(conversationId);
             if (messages.size() <= keepRecentCount) {
                 return;
             }
 
-            // 简单压缩：只保留最近的消息
+            // 简单的压缩策略：只保留最近的消息
             List<Message> recentMessages = messages.subList(
                 messages.size() - keepRecentCount, messages.size());
 
-            // 创建压缩摘要消息
-            Message compressionSummary = new Message("system",
-                String.format("[COMPRESSED] Removed %d older messages, kept recent %d messages",
-                    messages.size() - keepRecentCount, keepRecentCount));
+            memoryStore.put(conversationId, Collections.synchronizedList(new ArrayList<>(recentMessages)));
 
-            // 更新存储
-            List<Message> newMessages = Collections.synchronizedList(new ArrayList<>());
-            newMessages.add(compressionSummary);
-            newMessages.addAll(recentMessages);
-
-            memoryStore.get(agentId).put(sessionId, newMessages);
-
-            log.debug("Compressed memory: agent={}, session={}, kept={}, removed={}",
-                     agentId, sessionId, keepRecentCount, messages.size() - keepRecentCount);
-        });
-    }
-
-    @Override
-    public Mono<Boolean> hasSessionMemory(String agentId, String sessionId) {
-        return Mono.fromCallable(() -> {
-            Map<String, List<Message>> agentMemory = memoryStore.get(agentId);
-            return agentMemory != null && agentMemory.containsKey(sessionId)
-                   && !agentMemory.get(sessionId).isEmpty();
-        });
-    }
-
-    @Override
-    public Mono<Void> setMemoryMetadata(String agentId, String sessionId, MemoryMetadata metadata) {
-        return Mono.fromRunnable(() -> {
-            metadataStore.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>())
-                        .put(sessionId, metadata);
-            log.debug("Set memory metadata: agent={}, session={}", agentId, sessionId);
-        });
-    }
-
-    @Override
-    public Mono<MemoryMetadata> getMemoryMetadata(String agentId, String sessionId) {
-        return Mono.fromCallable(() -> {
-            Map<String, MemoryMetadata> agentMetadata = metadataStore.get(agentId);
-            if (agentMetadata != null) {
-                return agentMetadata.get(sessionId);
+            // 更新元数据
+            MemoryMetadata metadata = metadataStore.get(conversationId);
+            if (metadata != null) {
+                metadata.setUpdatedAt(LocalDateTime.now());
             }
-            return null;
+
+            log.debug("Compressed memory for conversation: {}, kept {} recent messages",
+                     conversationId, keepRecentCount);
         });
     }
 
     @Override
-    public Mono<List<Message>> searchMemory(String agentId, String sessionId, String query, int limit) {
+    public Mono<Boolean> memoryExists(String conversationId) {
+        return Mono.fromCallable(() -> memoryStore.containsKey(conversationId));
+    }
+
+    @Override
+    public Mono<Void> setMemoryMetadata(String conversationId, MemoryMetadata metadata) {
+        return Mono.fromRunnable(() -> {
+            metadataStore.put(conversationId, metadata);
+            log.debug("Set memory metadata for conversation: {}", conversationId);
+        });
+    }
+
+    @Override
+    public Mono<MemoryMetadata> getMemoryMetadata(String conversationId) {
+        return Mono.fromCallable(() -> metadataStore.get(conversationId));
+    }
+
+    @Override
+    public Mono<List<Message>> searchMemory(String conversationId, String query, int limit) {
         return Mono.fromCallable(() -> {
-            List<Message> messages = getMessagesForSession(agentId, sessionId);
+            List<Message> messages = getMessagesForConversation(conversationId);
             if (messages.isEmpty() || query == null || query.trim().isEmpty()) {
                 return new ArrayList<>();
             }
@@ -250,24 +216,18 @@ public class InMemoryMemoryService implements MemoryService {
     /**
      * 获取指定会话的消息列表
      */
-    private List<Message> getMessagesForSession(String agentId, String sessionId) {
-        Map<String, List<Message>> agentMemory = memoryStore.get(agentId);
-        if (agentMemory == null) {
-            return new ArrayList<>();
-        }
-
-        List<Message> messages = agentMemory.get(sessionId);
+    private List<Message> getMessagesForConversation(String conversationId) {
+        List<Message> messages = memoryStore.get(conversationId);
         return messages != null ? messages : new ArrayList<>();
     }
 
     /**
      * 更新元数据
      */
-    private void updateMetadata(String agentId, String sessionId) {
-        MemoryMetadata metadata = metadataStore.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>())
-                                              .computeIfAbsent(sessionId, k -> MemoryMetadata.builder()
-                                                  .createdAt(LocalDateTime.now())
-                                                  .build());
+    private void updateMetadata(String conversationId) {
+        MemoryMetadata metadata = metadataStore.computeIfAbsent(conversationId, k -> MemoryMetadata.builder()
+                                              .createdAt(LocalDateTime.now())
+                                              .build());
 
         metadata.setUpdatedAt(LocalDateTime.now());
     }

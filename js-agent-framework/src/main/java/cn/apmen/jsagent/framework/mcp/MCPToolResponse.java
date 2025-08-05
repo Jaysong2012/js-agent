@@ -62,9 +62,9 @@ public class MCPToolResponse extends BaseToolResponse {
     /**
      * 创建判定片段响应
      */
-    public static MCPToolResponse createDecisionFragment(String toolCallId, boolean directOutput) {
+    public static MCPToolResponse createDecisionFragment(String toolCallId) {
         MCPToolResponse response = new MCPToolResponse(toolCallId, "", "", true);
-        response.setDirectOutput(directOutput);
+        response.setDirectOutput(false);
         response.setResponseType(ResponseType.STREAM);
         return response;
     }

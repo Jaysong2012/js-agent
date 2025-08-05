@@ -60,12 +60,6 @@ public class ToolContext {
         return runnerContext != null ? runnerContext.getConversationId() : null;
     }
 
-    /**
-     * 获取执行ID
-     */
-    public String getExecutionId() {
-        return runnerContext != null ? runnerContext.getExecutionId() : null;
-    }
 
     /**
      * 设置参数

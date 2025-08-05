@@ -68,8 +68,7 @@ public class MCPConfiguration {
             parameters,
             new String[]{"path"},
             fileSystemMCPClient,
-            "read_file",
-            true
+            "read_file"
         );
     }
 
@@ -105,8 +104,7 @@ public class MCPConfiguration {
             parameters,
             new String[]{"path", "content"},
             fileSystemMCPClient,
-            "write_file",
-            false
+            "write_file"
         );
     }
 
@@ -149,8 +147,7 @@ public class MCPConfiguration {
             parameters,
             new String[]{"sql"},
             databaseMCPClient,
-            "query_database",
-            true
+            "query_database"
         );
     }
 
@@ -211,8 +208,7 @@ public class MCPConfiguration {
             parameters,
             new String[]{"query", "top_k", "is_fast"},
             bingSearchMCPClient,
-            "bing_search",
-            true
+            "bing_search"
         );
     }
 

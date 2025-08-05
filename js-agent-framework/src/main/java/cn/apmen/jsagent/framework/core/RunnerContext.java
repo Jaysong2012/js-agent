@@ -1,9 +1,8 @@
 package cn.apmen.jsagent.framework.core;
 
 import cn.apmen.jsagent.framework.conversation.ConversationService;
-import cn.apmen.jsagent.framework.execution.ExecutionContext;
+import cn.apmen.jsagent.framework.memory.MemoryService;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -11,15 +10,18 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 主要承载Agent执行上下文
- * 现在集成ConversationService进行对话历史管理，并分离执行相关职责到ExecutionContext
+ * 分离MemoryService和ConversationService的职责：
+ * - MemoryService: 记录Agent运行中的所有事件和消息（assistant/tool/system等）
+ * - ConversationService: 只记录用户可见的对话内容（user/TEXT_RESPONSE）
  */
 @Data
 @Builder
@@ -30,23 +32,19 @@ public class RunnerContext {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /**
+     * 内存服务 - 记录Agent运行中的所有事件和消息
+     */
+    private MemoryService memoryService;
+
+    /**
+     * 对话服务 - 只记录用户可见的对话内容
+     */
     private ConversationService conversationService;
 
     private String userId;
 
     private String conversationId;
-
-    /**
-     * 执行上下文 - 管理执行相关的状态和元数据
-     */
-    private ExecutionContext executionContext;
-
-    /**
-     * 本地消息历史记录 - 用于当前会话的临时存储
-     * 实际的持久化通过ConversationService管理
-     */
-    @Builder.Default
-    private List<Message> localMessageHistory = Collections.synchronizedList(new ArrayList<>());
 
     /**
      * 系统提示词
@@ -72,46 +70,44 @@ public class RunnerContext {
     private int maxContextTokens = 4000;
 
     /**
+     * 执行开始时间
+     */
+    @Builder.Default
+    private LocalDateTime startTime = LocalDateTime.now();
+
+    /**
+     * 执行元数据
+     */
+    @Builder.Default
+    private Map<String, Object> metadata = new ConcurrentHashMap<>();
+
+    /**
      * 添加消息到历史记录
-     * RunnerContext负责执行期间的临时缓存，ConversationService负责持久化
-     * 先添加到本地缓存保证功能正常，然后异步持久化
+     * 所有消息都会记录到MemoryService，只有用户消息会记录到ConversationService
      */
     public void addMessage(Message message) {
-        if (localMessageHistory == null) {
-            localMessageHistory = Collections.synchronizedList(new ArrayList<>());
-        }
-
-        // 确保localMessageHistory是可变的集合
-        if (!(localMessageHistory instanceof ArrayList) &&
-            !(localMessageHistory instanceof CopyOnWriteArrayList) &&
-            !localMessageHistory.getClass().getName().contains("SynchronizedList")) {
-            // 如果是不可变集合，重新创建为可变集合
-            List<Message> newHistory = Collections.synchronizedList(new ArrayList<>(localMessageHistory));
-            localMessageHistory = newHistory;
-        }
-
-        // 先添加到本地缓存，保证功能正常
-        localMessageHistory.add(message);
-
-        // 异步持久化到ConversationService
-        if (conversationService != null && conversationId != null) {
-            conversationService.addMessage(conversationId, message)
-                .doOnSuccess(v -> log.debug("Message persisted to ConversationService: role={}, content={}",
+        // 异步记录到MemoryService（所有消息）
+        if (memoryService != null && conversationId != null) {
+            memoryService.addMessage(conversationId, message)
+                .doOnSuccess(v -> log.debug("Message recorded to MemoryService: role={}, content={}",
                     message.getRole(),
                     message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null"))
-                .doOnError(error -> log.warn("Failed to persist message to ConversationService, message kept in local cache only", error))
+                .doOnError(error -> log.warn("Failed to record message to MemoryService", error))
                 .subscribe(); // 异步执行，不阻塞主流程
         }
 
-        try {
-            log.debug("Message added to local cache: role={}, content={}",
-                message.getRole(),
-                message.getContent() != null ? objectMapper.writeValueAsString(message) : "null");
-        } catch (JsonProcessingException e) {
-            log.debug("Message added to local cache: role={}, content={}",
-                message.getRole(),
-                message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null");
+        // 只有用户消息记录到ConversationService
+        if ("user".equals(message.getRole()) && conversationService != null && conversationId != null) {
+            conversationService.addMessage(conversationId, message)
+                .doOnSuccess(v -> log.debug("User message recorded to ConversationService: {}",
+                    message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null"))
+                .doOnError(error -> log.warn("Failed to record user message to ConversationService", error))
+                .subscribe();
         }
+
+        log.debug("Message processed: role={}, content={}",
+            message.getRole(),
+            message.getContent() != null ? message.getContent().substring(0, Math.min(50, message.getContent().length())) + "..." : "null");
     }
 
     /**
@@ -144,8 +140,23 @@ public class RunnerContext {
     }
 
     /**
+     * 记录用户可见的TEXT_RESPONSE到ConversationService
+     * 这是用户实际看到的Agent回复
+     */
+    public void recordTextResponseToConversation(String content) {
+        if (conversationService != null && conversationId != null && content != null && !content.trim().isEmpty()) {
+            Message assistantMessage = new Message("assistant", content);
+            conversationService.addMessage(conversationId, assistantMessage)
+                .doOnSuccess(v -> log.debug("TEXT_RESPONSE recorded to ConversationService: {}",
+                    content.substring(0, Math.min(50, content.length())) + "..."))
+                .doOnError(error -> log.warn("Failed to record TEXT_RESPONSE to ConversationService", error))
+                .subscribe();
+        }
+    }
+
+    /**
      * 获取完整的消息列表（包含系统提示词）
-     * 优先使用ConversationService的上下文窗口管理
+     * 使用MemoryService的上下文窗口管理
      */
     public List<Message> getCompleteMessageList() {
         List<Message> completeMessages = new ArrayList<>();
@@ -155,39 +166,15 @@ public class RunnerContext {
             completeMessages.add(new Message("system", systemPrompt));
         }
 
-        // 如果有ConversationService，使用智能上下文窗口
-        if (conversationService != null && conversationId != null) {
+        // 从MemoryService获取上下文窗口消息
+        if (memoryService != null && conversationId != null) {
             try {
-                List<Message> contextMessages = conversationService.getContextWindowMessages(
-                    conversationId, maxContextTokens, systemPrompt).block();
+                List<Message> contextMessages = memoryService.getContextMemory(conversationId, maxContextTokens, systemPrompt).block();
                 if (contextMessages != null && !contextMessages.isEmpty()) {
-                    // 合并持久化的历史消息和本地缓存的消息
                     completeMessages.addAll(contextMessages);
-                    // 添加本地缓存中的新消息（避免重复）
-                    if (localMessageHistory != null) {
-                        synchronized (localMessageHistory) {
-                            for (Message localMsg : localMessageHistory) {
-                                // 简单的重复检查：如果最后几条消息不包含当前消息，则添加
-                                boolean isDuplicate = contextMessages.stream()
-                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) &&
-                                             msg.getContent().equals(localMsg.getContent()));
-                                if (!isDuplicate) {
-                                    completeMessages.add(localMsg);
-                                }
-                            }
-                        }
-                    }
-                    return completeMessages;
                 }
             } catch (Exception e) {
-                log.warn("Failed to get context window messages from ConversationService, falling back to local", e);
-            }
-        }
-
-        // 降级到本地消息历史
-        if (localMessageHistory != null) {
-            synchronized (localMessageHistory) {
-                completeMessages.addAll(new ArrayList<>(localMessageHistory));
+                log.warn("Failed to get context window messages from MemoryService", e);
             }
         }
 
@@ -196,78 +183,62 @@ public class RunnerContext {
 
     /**
      * 获取消息历史的副本（线程安全）
-     * 优先从ConversationService获取完整历史，本地缓存作为补充
+     * 从MemoryService获取完整历史
      */
     public List<Message> getMessageHistory() {
-        // 如果有ConversationService，从持久化存储获取
-        if (conversationService != null && conversationId != null) {
+        // 从MemoryService获取完整历史
+        if (memoryService != null && conversationId != null) {
             try {
-                List<Message> persistedHistory = conversationService.getConversationHistory(conversationId).block();
+                List<Message> persistedHistory = memoryService.getMemoryHistory(conversationId).block();
                 if (persistedHistory != null) {
-                    // 合并持久化历史和本地缓存
-                    List<Message> mergedHistory = new ArrayList<>(persistedHistory);
-                    // 添加本地缓存中的新消息
-                    if (localMessageHistory != null) {
-                        synchronized (localMessageHistory) {
-                            for (Message localMsg : localMessageHistory) {
-                                // 避免重复添加
-                                boolean isDuplicate = persistedHistory.stream()
-                                    .anyMatch(msg -> msg.getRole().equals(localMsg.getRole()) &&
-                                             msg.getContent().equals(localMsg.getContent()));
-                                if (!isDuplicate) {
-                                    mergedHistory.add(localMsg);
-                                }
-                            }
-                        }
-                    }
-                    return mergedHistory;
+                    return new ArrayList<>(persistedHistory);
                 }
             } catch (Exception e) {
-                log.warn("Failed to get conversation history from ConversationService, falling back to local", e);
+                log.warn("Failed to get memory history from MemoryService", e);
             }
         }
-        // 降级到本地历史
-        if (localMessageHistory == null) {
-            return new ArrayList<>();
-        }
-        synchronized (localMessageHistory) {
-            return new ArrayList<>(localMessageHistory);
-        }
+        return new ArrayList<>();
     }
 
     /**
      * 获取最近的N条消息
      */
     public List<Message> getRecentMessages(int limit) {
-        if (conversationService != null && conversationId != null) {
+        if (memoryService != null && conversationId != null) {
             try {
-                List<Message> recentMessages = conversationService.getRecentMessages(conversationId, limit).block();
+                List<Message> recentMessages = memoryService.getRecentMemory(conversationId, limit).block();
                 if (recentMessages != null) {
                     return recentMessages;
                 }
             } catch (Exception e) {
-                log.warn("Failed to get recent messages from ConversationService, falling back to local", e);
+                log.warn("Failed to get recent messages from MemoryService", e);
             }
         }
-        // 降级到本地历史
-        if (localMessageHistory == null || localMessageHistory.isEmpty()) {
-            return new ArrayList<>();
+        return new ArrayList<>();
+    }
+
+    /**
+     * 获取对话历史（仅用户可见的内容）
+     * 从ConversationService获取
+     */
+    public List<Message> getConversationHistory() {
+        if (conversationService != null && conversationId != null) {
+            try {
+                List<Message> conversationHistory = conversationService.getConversationHistory(conversationId).block();
+                if (conversationHistory != null) {
+                    return conversationHistory;
+                }
+            } catch (Exception e) {
+                log.warn("Failed to get conversation history from ConversationService", e);
+            }
         }
-        synchronized (localMessageHistory) {
-            int size = localMessageHistory.size();
-            int fromIndex = Math.max(0, size - limit);
-            return new ArrayList<>(localMessageHistory.subList(fromIndex, size));
-        }
+        return new ArrayList<>();
     }
 
     /**
      * 检查是否达到最大轮次
      */
     public boolean isMaxRoundsReached() {
-        // 优先使用ExecutionContext的轮次管理
-        if (executionContext != null) {
-            return executionContext.isMaxRoundsReached();
-        }
         return currentRound.get() >= maxRounds;
     }
 
@@ -275,10 +246,6 @@ public class RunnerContext {
      * 增加轮次计数
      */
     public int incrementRound() {
-        // 同时更新ExecutionContext和本地计数器
-        if (executionContext != null) {
-            executionContext.incrementRound();
-        }
         return currentRound.incrementAndGet();
     }
 
@@ -286,10 +253,6 @@ public class RunnerContext {
      * 获取当前轮次
      */
     public int getCurrentRound() {
-        // 优先使用ExecutionContext的轮次
-        if (executionContext != null) {
-            return executionContext.getCurrentRound();
-        }
         return currentRound.get();
     }
 
@@ -298,9 +261,6 @@ public class RunnerContext {
      */
     public void resetRound() {
         currentRound.set(0);
-        if (executionContext != null) {
-            executionContext.setCurrentRound(0);
-        }
     }
 
     /**
@@ -311,88 +271,34 @@ public class RunnerContext {
                !userId.trim().isEmpty() && !conversationId.trim().isEmpty();
     }
 
+
     /**
-     * 同步本地历史到ConversationService
-     * 这个方法主要用于批量同步，正常情况下消息应该实时持久化
+     * 设置元数据
      */
-    public void syncToConversationService() {
-        if (conversationService != null && conversationId != null && localMessageHistory != null) {
-            synchronized (localMessageHistory) {
-                if (!localMessageHistory.isEmpty()) {
-                    conversationService.addMessages(conversationId, new ArrayList<>(localMessageHistory))
-                        .doOnSuccess(v -> {
-                            log.debug("Synced {} messages to ConversationService", localMessageHistory.size());
-                            // 同步成功后清空本地缓存（可选）
-                            // localMessageHistory.clear();
-                        })
-                        .doOnError(error -> log.warn("Failed to sync messages to ConversationService", error))
-                        .subscribe();
-                }
+    public void setMetadata(String key, Object value) {
+        if (metadata != null) {
+            metadata.put(key, value);
+        }
+    }
+
+    /**
+     * 获取元数据
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getMetadata(String key, Class<T> type) {
+        if (metadata != null && metadata.containsKey(key)) {
+            Object value = metadata.get(key);
+            if (type.isInstance(value)) {
+                return (T) value;
             }
         }
+        return null;
     }
 
     /**
-     * 清空本地消息缓存
-     * 注意：这不会影响ConversationService中的持久化数据
+     * 获取所有元数据
      */
-    public void clearLocalMessageCache() {
-        if (localMessageHistory != null) {
-            synchronized (localMessageHistory) {
-                localMessageHistory.clear();
-                log.debug("Local message cache cleared for conversation: {}", conversationId);
-            }
-        }
-    }
-
-    /**
-     * 获取本地缓存的消息数量
-     */
-    public int getLocalMessageCount() {
-        if (localMessageHistory == null) {
-            return 0;
-        }
-        synchronized (localMessageHistory) {
-            return localMessageHistory.size();
-        }
-    }
-
-    // 委托给ExecutionContext的方法
-
-    /**
-     * 获取执行ID
-     */
-    public String getExecutionId() {
-        return executionContext != null ? executionContext.getExecutionId() : null;
-    }
-
-    /**
-     * 获取Agent ID
-     */
-    public String getAgentId() {
-        return executionContext != null ? executionContext.getAgentId() : null;
-    }
-
-    /**
-     * 设置执行元数据
-     */
-    public void setExecutionMetadata(String key, Object value) {
-        if (executionContext != null) {
-            executionContext.setMetadata(key, value);
-        }
-    }
-
-    /**
-     * 获取执行元数据
-     */
-    public <T> T getExecutionMetadata(String key, Class<T> type) {
-        return executionContext != null ? executionContext.getMetadata(key, type) : null;
-    }
-
-    /**
-     * 获取执行指标
-     */
-    public ExecutionContext.ExecutionMetrics getExecutionMetrics() {
-        return executionContext != null ? executionContext.getMetrics() : null;
+    public Map<String, Object> getAllMetadata() {
+        return new ConcurrentHashMap<>(metadata);
     }
 }
