@@ -5,7 +5,7 @@
 [![Java Version](https://img.shields.io/badge/Java-17+-green.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-brightgreen.svg)](https://spring.io/projects/spring-boot)
 
-一个基于 Spring Boot 和 Reactor 的企业级 Agent 框架，支持多 Agent 协作、工具调用、流式响应和事件驱动架构。
+一个基于 Spring Boot 和 Reactor 的企业级 Agent 框架，支持智能上下文管理、工具调用、流式响应和事件驱动架构。专为构建高性能、可扩展的 AI Agent 应用而设计。
 
 ## 🚀 核心特性
 
@@ -25,10 +25,11 @@
 - **流式工具**: 支持流式工具调用和响应
 - **直接输出**: AgentTool 支持直接输出给用户或返回给主 Agent
 - **工具上下文**: 丰富的工具执行上下文信息
+- **并行执行**: 支持多工具并行调用，提升执行效率
 
 ### 📡 事件驱动架构
 - **AgentEvent**: 统一的事件模型
-    - `TEXT_RESPONSE`: 用户回复内容
+    - `TEXT_RESPONSE`: 文本回复内容
     - `TOOL_CALL`: 工具调用事件
     - `TOOL_RESULT`: 工具执行结果
     - `DEBUG`: 系统调试信息
@@ -39,11 +40,10 @@
 - **实时响应**: 支持 Server-Sent Events (SSE) 流式输出
 - **背压控制**: 基于 Reactor 的响应式流处理
 
-### 💬 对话管理
-- **会话持久化**: 支持内存和外部存储
-- **上下文管理**: 自动管理对话历史和 Token 限制
-- **多轮对话**: 支持复杂的多轮对话场景
-- **职责分离**: RunnerContext 负责执行期间缓存，ConversationService 负责持久化
+### 💾 双层存储架构
+- **MemoryService**: 记录Agent运行中的所有事件和消息（assistant/tool/system等）
+- **ConversationService**: 只记录用户可见的对话内容（user/TEXT_RESPONSE）
+- **职责分离**: 完整记录 vs 用户体验，满足不同场景需求
 
 ## 🏗️ 架构设计
 
@@ -52,35 +52,35 @@
 │                           JS Agent Framework                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐                  │
-│  │ CoreAgent   │  │ AgentRunner │  │ ConversationService │                  │
+│  │ CoreAgent   │  │ AgentRunner │  │ RunnerContext       │                  │
 │  │             │  │             │  │                     │                  │
-│  │ - LLM调用   │  │ - 执行循环  │  │ - 对话历史          │                  │
-│  │ - 工具调用  │  │ - 事件转换  │  │ - 会话管理          │                  │
-│  │ - 流式响应  │  │ - 异常处理  │  │ - 上下文维护        │                  │
+│  │ - LLM调用   │  │ - 执行循环  │  │ - 消息管理          │                  │
+│  │ - 工具调用  │  │ - 事件转换  │  │ - 轮次控制          │                  │
+│  │ - 流式响应  │  │ - 异常处理  │  │ - 元数据存储        │                  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐                  │
-│  │ContextInfo  │  │ SystemPrompt│  │ TemplateEngine      │                  │
-│  │             │  │             │  │                     │                  │
-│  │ - 用户信息  │  │ - 模板渲染  │  │ - Mustache支持      │                  │
-│  │ - 会话信息  │  │ - 动态生成  │  │ - 数据绑定          │                  │
-│  │ - 环境信息  │  │ - 个性化    │  │ - 降级处理          │                  │
+│  │MemoryService│  │ConversationS│  │ ContextInformation  │                  │
+│  │             │  │ervice       │  │                     │                  │
+│  │ - 完整记录  │  │ - 用户可见  │  │ - 用户信息          │                  │
+│  │ - 所有消息  │  │ - 对话历史  │  │ - 会话信息          │                  │
+│  │ - 上下文窗口│  │ - 会话管理  │  │ - 环境信息          │                  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐                  │
 │  │ ToolRegistry│  │ AgentTool   │  │ WorkerAgent         │                  │
 │  │             │  │             │  │                     │                  │
 │  │ - 工具注册  │  │ - Agent包装 │  │ - 专业领域          │                  │
-│  │ - 执行管理  │  │ - 直接输出  │  │ - 独立LLM           │                  │
+│  │ - 并行执行  │  │ - 直接输出  │  │ - 独立LLM           │                  │
 │  │ - 上下文传递│  │ - 流式支持  │  │ - 上下文感知        │                  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐                  │
-│  │StreamBuffer │  │ AgentEvent  │  │ OpenAIUnified       │                  │
+│  │StreamBuffer │  │ AgentEvent  │  │ SystemPrompt        │                  │
 │  │             │  │             │  │                     │                  │
-│  │ - 智能缓冲  │  │ - 事件模型  │  │ - LLM统一接口       │                  │
-│  │ - 流式控制  │  │ - 类型安全  │  │ - 多提供商支持      │                  │
-│  │ - 背压处理  │  │ - 序列化    │  │ - 流式调用          │                  │
+│  │ - 智能缓冲  │  │ - 事件模型  │  │ - Mustache模板      │                  │
+│  │ - 流式控制  │  │ - TOOL_RESULT│ │ - 动态渲染          │                  │
+│  │ - 背压处理  │  │ - 类型安全  │  │ - 个性化提示        │                  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -91,9 +91,9 @@
 
 ```xml
 <dependency>
-<groupId>cn.apmen</groupId>
-<artifactId>js-agent-framework</artifactId>
-<version>0.0.1-SNAPSHOT</version>
+    <groupId>cn.apmen</groupId>
+    <artifactId>js-agent-framework</artifactId>
+    <version>0.0.2-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -101,7 +101,7 @@
 
 ```java
 @Configuration
-public class AgentConfig {
+public class AgentConfiguration {
 
     @Bean
     public OpenAIUnifiedChatClient openAIClient() {
@@ -112,11 +112,12 @@ public class AgentConfig {
     }
     
     @Bean
-    public CoreAgent coreAgent(OpenAIUnifiedChatClient client) {
+    public CoreAgent coreAgent(OpenAIUnifiedChatClient client, ToolRegistry toolRegistry) {
         return CoreAgent.builder()
             .id("main-agent")
             .name("智能助手")
             .openAIUnifiedChatClient(client)
+            .toolRegistry(toolRegistry)
             .build();
     }
     
@@ -152,6 +153,16 @@ public class AgentConfig {
                 请根据用户需求提供个性化的帮助。
                 """)
             .build();
+    }
+
+    @Bean
+    public MemoryService memoryService() {
+        return new InMemoryMemoryService();
+    }
+
+    @Bean
+    public ConversationService conversationService() {
+        return new InMemoryConversationService();
     }
 }
 ```
@@ -204,6 +215,9 @@ public class ChatService {
     private ConversationService conversationService;
     
     @Autowired
+    private MemoryService memoryService;
+
+    @Autowired
     private AgentConfig agentConfig;
     
     public Flux<AgentEvent> chat(String userId, String message) {
@@ -214,7 +228,7 @@ public class ChatService {
             .build();
         
         AgentRunner runner = new AgentRunner(
-            coreAgent, agentConfig, conversationService
+            coreAgent, agentConfig, conversationService, memoryService
         );
         
         return runner.runStream(request);
@@ -232,41 +246,38 @@ public class ChatService {
 ```java
 // 框架自动加载的用户信息结构
 UserInformation userInfo = UserInformation.builder()
-.userId("user-123")
-.username("张三")
-.preferredLanguage("zh-CN")
-.timezone("Asia/Shanghai")
-.userLevel("VIP")
-.preferences(Map.of(
-"responseStyle", "professional",
-"detailLevel", "high"
-))
-.build();
+    .userId("user-123")
+    .username("张三")
+    .preferredLanguage("zh-CN")
+    .timezone("Asia/Shanghai")
+    .userLevel("VIP")
+    .preferences(Map.of(
+        "responseStyle", "professional",
+        "detailLevel", "high"
+    ))
+    .build();
 ```
 
 #### 2. 会话信息 (ConversationInformation)
 ```java
 // 框架自动加载的会话信息
 ConversationInformation convInfo = ConversationInformation.builder()
-.conversationId("conv-456")
-.isNewConversation(false)
-.messageCount(15)
-.lastActiveTime(LocalDateTime.now())
-.conversationTopic("技术讨论")
-.tags(List.of("编程", "Java"))
-.build();
+    .conversationId("conv-456")
+    .isNewConversation(false)
+    .messageCount(15)
+    .lastActiveTime(LocalDateTime.now())
+    .build();
 ```
 
 #### 3. 环境信息 (EnvironmentInformation)
 ```java
 // 框架自动加载的环境信息
 EnvironmentInformation envInfo = EnvironmentInformation.builder()
-.currentTime(LocalDateTime.now())
-.systemVersion("1.0.0")
-.availableTools(List.of("calculator", "weather", "search"))
-.systemLoad("normal")
-.deploymentEnvironment("production")
-.build();
+    .currentTime(LocalDateTime.now())
+    .systemVersion("1.0.0")
+    .availableTools(List.of("calculator", "weather", "search"))
+    .systemLoad("normal")
+    .build();
 ```
 
 ### 系统提示词模板渲染
@@ -370,60 +381,57 @@ AgentConfig config = AgentConfig.builder()
 {{userInfo.preferences.responseStyle}}
 ```
 
-### 职责分离设计
+### 双层存储架构设计
 
-#### RunnerContext vs ConversationService
+#### MemoryService vs ConversationService
 
-**RunnerContext 职责**：
-- 执行期间的临时消息缓存
-- 快速访问当前会话状态
-- 本地消息历史管理
-- 执行上下文维护
+**MemoryService 职责**：
+- 记录Agent运行中的**所有**事件和消息
+- 包含 system、user、assistant、tool 等所有类型消息
+- 用于Agent推理和上下文管理
+- 支持智能上下文窗口截取
 
 ```java
-// RunnerContext 主要用于执行期间
-context.addMessage(new Message("user", "用户消息"));
-context.addAssistantMessage("助手回复");
-context.addToolMessage(toolCallId, "工具结果");
+// MemoryService 记录所有消息
+memoryService.addMessage(conversationId, new Message("system", "系统提示"));
+memoryService.addMessage(conversationId, new Message("user", "用户消息"));
+memoryService.addMessage(conversationId, new Message("assistant", "Agent思考"));
+memoryService.addMessage(conversationId, new Message("tool", "工具结果"));
 
-// 获取本地缓存的消息
-List<Message> localMessages = context.getLocalMessageHistory();
+// 获取完整记录用于Agent推理
+List<Message> allMessages = memoryService.getMemoryHistory(conversationId);
+List<Message> contextWindow = memoryService.getContextMemory(conversationId, maxTokens, systemPrompt);
 ```
 
 **ConversationService 职责**：
-- 持久化存储聊天记录
-- 跨会话的历史查询
-- 智能上下文窗口管理
-- 会话元数据管理
+- 只记录**用户可见**的对话内容
+- 包含用户输入和Agent的最终回复
+- 用于对话历史展示和会话管理
+- 提供清洁的用户体验
 
 ```java
-// ConversationService 负责持久化
-conversationService.addMessage(conversationId, message);
-conversationService.getConversationHistory(conversationId);
-conversationService.getContextWindowMessages(conversationId, maxTokens, systemPrompt);
+// ConversationService 只记录用户可见内容
+conversationService.addMessage(conversationId, new Message("user", "用户消息"));
+conversationService.addMessage(conversationId, new Message("assistant", "最终回复"));
+
+// 获取对话历史用于展示
+List<Message> chatHistory = conversationService.getConversationHistory(conversationId);
 ```
 
-#### 协作流程
+#### 数据流设计
 
-1. **消息添加流程**：
-   ```
-   用户消息 → ConversationService.addMessage() → RunnerContext.addMessage()
-   ↓                              ↓
-   持久化存储                      本地缓存
-   ```
+```
+用户输入 → RunnerContext.addMessage()
+    ├─ 记录到 MemoryService（所有消息）
+    └─ 记录到 ConversationService（仅用户消息）
 
-2. **消息获取流程**：
-   ```
-   获取完整历史 → ConversationService.getConversationHistory()
-   获取上下文窗口 → ConversationService.getContextWindowMessages()
-   获取本地缓存 → RunnerContext.getLocalMessageHistory()
-   ```
+Agent处理 → 各种内部消息 → MemoryService（所有消息）
 
-3. **容错机制**：
-   ```
-   ConversationService 失败 → 降级到 RunnerContext 本地缓存
-   保证基本功能正常 → 异步重试持久化
-   ```
+Agent完整回复完成 → recordCompleteResponseToConversation()
+    ├─ 从 MemoryService 获取最新assistant消息
+    ├─ 合并为完整回复
+    └─ 记录到 ConversationService（完整回复）
+```
 
 ## 🔧 核心组件详解
 
@@ -685,43 +693,63 @@ public class AgentLifecycleHandler implements AgentLifecycle {
 ### v0.0.2 新特性
 - ✨ **智能上下文管理**: 自动加载用户、会话、环境信息
 - 🎨 **系统提示词模板**: 支持 Mustache 语法的动态模板
-- 🔧 **职责分离优化**: RunnerContext 和 ConversationService 职责更清晰
-- 🚀 **性能提升**: 优化消息加载和模板渲染性能
+- 🔧 **双层存储架构**: MemoryService 和 ConversationService 职责分离
+- 📡 **完整事件系统**: 新增 TOOL_RESULT 事件，完善事件流
+- 🚀 **性能提升**: 移除冗余的本地缓存，优化消息处理
 - 🛡️ **容错增强**: 更好的降级机制和错误处理
 
 ### 迁移指南
 
 从 v0.0.1 升级到 v0.0.2：
 
-1. **更新 AgentConfig**：
+1. **更新依赖注入**：
    ```java
-   // 旧版本
-   AgentConfig config = new AgentConfig();
-   config.setStreamToolCallContent(true);
+   // 新版本需要同时注入 MemoryService 和 ConversationService
+   @Autowired
+   private MemoryService memoryService;
 
-// 新版本 - 支持系统提示词模板
-AgentConfig config = AgentConfig.builder()
-.streamToolCallContent(true)
-.systemPromptTemplate("你的自定义模板")
-.build();
-```
+   @Autowired
+   private ConversationService conversationService;
 
-2. **更新 AgentRunner 使用方式**：
-   ```java
-   // 新版本会自动加载上下文信息，无需手动处理
-   AgentRunner runner = new AgentRunner(coreAgent, config, conversationService);
+   // AgentRunner 构造函数参数更新
+   AgentRunner runner = new AgentRunner(
+       coreAgent, agentConfig, conversationService, memoryService
+   );
    ```
 
-3. **利用新的上下文信息**：
+2. **配置 Bean**：
    ```java
-   // 在自定义工具中可以访问丰富的上下文信息
-   @Override
-   public Mono<ToolResult> execute(ToolCall toolCall, ToolContext context) {
-   RunnerContext runnerContext = context.getRunnerContext();
-   String userId = runnerContext.getUserId();
-   // 可以获取用户偏好、会话历史等信息
-   return Mono.just(ToolResult.success(toolCall.getId(), "个性化结果"));
+   @Bean
+   public MemoryService memoryService() {
+       return new InMemoryMemoryService();
    }
+
+   @Bean
+   public ConversationService conversationService() {
+       return new InMemoryConversationService();
+   }
+   ```
+
+3. **事件处理更新**：
+   ```java
+   // 新版本支持完整的事件类型
+   runner.runStream(request)
+       .subscribe(event -> {
+           switch (event.getType()) {
+               case TEXT_RESPONSE:
+                   // 处理文本回复
+                   break;
+               case TOOL_CALL:
+                   // 处理工具调用
+                   break;
+               case TOOL_RESULT:
+                   // 处理工具结果 (新增)
+                   break;
+               case DEBUG:
+                   // 处理调试信息
+                   break;
+           }
+       });
    ```
 
 ## 🤝 贡献指南

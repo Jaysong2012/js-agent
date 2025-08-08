@@ -1,5 +1,6 @@
-package cn.apmen.jsagent.framework.agent;
+package cn.apmen.jsagent.framework.paradigm.manus;
 
+import cn.apmen.jsagent.framework.agent.Agent;
 import cn.apmen.jsagent.framework.core.AgentRequest;
 import cn.apmen.jsagent.framework.core.AgentResponse;
 import cn.apmen.jsagent.framework.enums.AgentStateEnum;
@@ -16,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 增强的BaseAgent，集成MemoryService进行记忆管理
+ * 增强的BaseAgent，集成AgentMemoryService进行记忆管理
  */
 @Slf4j
 public abstract class BaseAgent implements Agent {
@@ -27,7 +28,7 @@ public abstract class BaseAgent implements Agent {
     protected String systemPrompt;
     protected Integer maxSteps;
     protected Integer currentStep = 0;
-    protected AgentStateEnum state = AgentStateEnum.IDLE;
+    public AgentStateEnum state = AgentStateEnum.IDLE;
 
     // Memory管理相关
     protected AgentMemoryService memoryService;

@@ -1,4 +1,4 @@
-package cn.apmen.jsagent.framework.agent;
+package cn.apmen.jsagent.framework.paradigm.manus;
 
 import cn.apmen.jsagent.framework.core.AgentRequest;
 import cn.apmen.jsagent.framework.core.AgentResponse;

@@ -1,6 +1,7 @@
-package cn.apmen.jsagent.framework.agent;
+package cn.apmen.jsagent.framework.paradigm.tool;
 
 import cn.apmen.jsagent.framework.enums.AgentStateEnum;
+import cn.apmen.jsagent.framework.paradigm.manus.BaseAgent;
 import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
 import cn.apmen.jsagent.framework.tool.AbstractToolExecutor;
 import cn.apmen.jsagent.framework.tool.ToolContext;

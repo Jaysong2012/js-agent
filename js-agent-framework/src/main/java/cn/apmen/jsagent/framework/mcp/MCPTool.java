@@ -26,6 +26,8 @@ import java.util.Map;
  * MCP工具 - 将MCP服务包装为工具
  * 继承AbstractToolExecutor，符合新的工具设计规范
  * 同时实现StreamingToolExecutor以支持流式执行
+ *
+ * 支持多工具模式：一个MCPTool实例可以调用MCP服务器中的任意工具
  */
 @Slf4j
 public class MCPTool extends AbstractToolExecutor implements StreamingToolExecutor {
@@ -34,8 +36,6 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
 
     // MCP客户端 - 实际执行功能的客户端
     private final McpSyncClient mcpClient;
-    // MCP工具名称
-    private final String mcpToolName;
     // 工具名称
     private final String toolName;
     // 工具描述
@@ -52,44 +52,52 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     }
 
     /**
-     * 构造函数
+     * 构造函数 - 多工具模式，支持调用MCP服务器中的任意工具
+     * @param mcpClient MCP客户端
      * @param toolName 工具名称
      * @param description 工具描述
-     * @param parametersDefinition 参数定义
-     * @param requiredParameters 必需参数
-     * @param mcpClient MCP客户端
-     * @param mcpToolName MCP工具名称
      */
-    public MCPTool(String toolName, String description,
-                   Map<String, Object> parametersDefinition,
-                   String[] requiredParameters,
-                   McpSyncClient mcpClient, String mcpToolName) {
+    public MCPTool(McpSyncClient mcpClient, String toolName, String description) {
+        this.mcpClient = mcpClient;
         this.toolName = toolName;
         this.description = description;
-        this.parametersDefinition = new HashMap<>(parametersDefinition);
-        this.requiredParameters = requiredParameters != null ? requiredParameters.clone() : new String[0];
-        this.mcpClient = mcpClient;
-        this.mcpToolName = mcpToolName;
+
+        // 创建通用的参数定义，支持动态工具调用
+        this.parametersDefinition = createDynamicParametersDefinition();
+        this.requiredParameters = new String[]{"tool_name", "arguments"};
     }
 
-
     /**
-     * 便捷构造函数 - 创建标准的MCP工具
-     * @param toolName 工具名称
-     * @param description 工具描述
-     * @param mcpClient MCP客户端
-     * @param mcpToolName MCP工具名称
-     * @return MCPTool实例
+     * 创建动态参数定义，支持调用MCP服务器中的任意工具
      */
-    public static MCPTool createStandardMCPTool(String toolName, String description,
-                                               McpSyncClient mcpClient, String mcpToolName) {
-        // 创建通用的参数定义
+    private Map<String, Object> createDynamicParametersDefinition() {
         Map<String, Object> parameters = new HashMap<>();
         parameters.put("type", "object");
-        parameters.put("properties", new HashMap<>());
-        parameters.put("required", new String[0]);
 
-        return new MCPTool(toolName, description, parameters, new String[0], mcpClient, mcpToolName);
+        Map<String, Object> properties = new HashMap<>();
+
+        // tool_name参数 - 指定要调用的具体工具
+        Map<String, Object> toolNameParam = new HashMap<>();
+        toolNameParam.put("type", "string");
+        toolNameParam.put("description", "要调用的具体工具名称，例如：bing_search, maps_geo, datetime_current_time等");
+        properties.put("tool_name", toolNameParam);
+
+        // arguments参数 - 工具的具体参数
+        Map<String, Object> argumentsParam = new HashMap<>();
+        argumentsParam.put("type", "object");
+        argumentsParam.put("description", "工具的具体参数对象，例如：{\"query\": \"搜索关键词\", \"top_k\": 3}");
+        argumentsParam.put("additionalProperties", true);
+        // 添加示例
+        Map<String, Object> example = new HashMap<>();
+        example.put("query", "搜索关键词");
+        example.put("top_k", 3);
+        argumentsParam.put("example", example);
+        properties.put("arguments", argumentsParam);
+
+        parameters.put("properties", properties);
+        parameters.put("required", new String[]{"tool_name"});  // arguments不是必需的，可以为空对象
+
+        return parameters;
     }
 
     @Override
@@ -115,7 +123,7 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     @Override
     protected Mono<ToolResult> doExecute(ToolCall toolCall, ToolContext context, Map<String, Object> arguments) {
         try {
-            log.debug("Executing MCP tool {} with arguments: {}", mcpToolName, arguments);
+            log.debug("Executing MCP tool {} with arguments: {}", toolName, objectMapper.writeValueAsString(arguments));
 
             // 执行MCP工具调用
             return executeMCPCall(toolCall.getId(), arguments, context)
@@ -133,16 +141,32 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     private Mono<ToolResult> executeMCPCall(String toolCallId, Map<String, Object> args, ToolContext toolContext) {
         return Mono.fromCallable(() -> {
             try {
-                log.info("开始调用MCP工具: {}, 参数: {}", mcpToolName, args);
+                // 从参数中提取工具名称和参数
+                String actualToolName = (String) args.get("tool_name");
+                Object argumentsRaw = args.get("arguments");
+
+                log.debug("原始arguments参数: {}, 类型: {}", argumentsRaw,
+                    argumentsRaw != null ? argumentsRaw.getClass().getSimpleName() : "null");
+
+                Map<String, Object> actualArgs = parseArgumentsParameter(argumentsRaw);
+
+                if (actualToolName == null) {
+                    throw new IllegalArgumentException("tool_name parameter is required for MCP tool call");
+                }
+                if (actualArgs == null) {
+                    actualArgs = new HashMap<>();
+                }
+
+                log.info("开始调用MCP工具: {}, 参数: {}", actualToolName, actualArgs);
 
                 // 构建MCP工具调用请求
-                McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(mcpToolName, args);
+                McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(actualToolName, actualArgs);
                 log.debug("构建MCP请求: {}", request);
 
                 // 调用MCP工具
-                log.info("正在调用MCP工具: {}", mcpToolName);
+                log.info("正在调用MCP工具: {}", actualToolName);
                 McpSchema.CallToolResult result = mcpClient.callTool(request);
-                log.info("MCP工具调用完成: {}, 结果: {}", mcpToolName, result != null ? "成功" : "失败");
+                log.info("MCP工具调用完成: {}, 结果: {}", actualToolName, result != null ? "成功" : "失败");
 
                 // 检查是否有错误
                 if (Boolean.TRUE.equals(result.isError())) {
@@ -159,13 +183,13 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
                 return success(toolCallId, content);
             } catch (Exception e) {
                 log.error("MCP工具调用异常: {}, 错误类型: {}, 错误消息: {}",
-                    mcpToolName, e.getClass().getSimpleName(), e.getMessage());
+                    toolName, e.getClass().getSimpleName(), e.getMessage());
 
                 // 特殊处理超时异常
                 if (e.getMessage() != null && e.getMessage().contains("SocketTimeoutException")) {
                     log.error("MCP工具调用超时，可能是服务器响应过慢或网络问题");
                     throw new AgentException(ErrorCode.TOOL_TIMEOUT,
-                        "MCP tool call timeout: " + mcpToolName + " - 服务器响应超时，请稍后重试", e);
+                        "MCP tool call timeout: " + toolName + " - 服务器响应超时，请稍后重试", e);
                 }
                 throw new AgentException(ErrorCode.TOOL_EXECUTION_FAILED,
                     "MCP tool call failed: " + e.getMessage(), e);
@@ -175,19 +199,19 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
         .timeout(Duration.ofSeconds(180)) // 增加超时时间到3分钟
         .onErrorMap(error -> {
             if (error instanceof java.util.concurrent.TimeoutException) {
-                log.error("MCP工具调用整体超时: {}", mcpToolName);
+                log.error("MCP工具调用整体超时: {}", toolName);
                 return new AgentException(ErrorCode.TOOL_TIMEOUT,
-                    "MCP tool call timeout: " + mcpToolName + " - 整体调用超时", error);
+                    "MCP tool call timeout: " + toolName + " - 整体调用超时", error);
             }
             if (!(error instanceof AgentException)) {
-                log.error("MCP工具调用未知错误: {}, 错误: {}", mcpToolName, error.getMessage());
+                log.error("MCP工具调用未知错误: {}, 错误: {}", toolName, error.getMessage());
                 return new AgentException(ErrorCode.TOOL_EXECUTION_FAILED,
-                    "MCP tool call failed for: " + mcpToolName, error);
+                    "MCP tool call failed for: " + toolName, error);
             }
             return error;
         })
         .onErrorResume(error -> {
-            log.error("MCP工具调用最终失败: {}, 返回错误结果", mcpToolName);
+            log.error("MCP工具调用最终失败: {}, 返回错误结果", toolName);
             return Mono.just(ToolResult.error(toolCallId, "MCP tool call failed: " + error.getMessage()));
         });
     }
@@ -199,21 +223,21 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     public Flux<BaseToolResponse> executeStream(ToolCall toolCall, ToolContext toolContext) {
         try {
             Map<String, Object> arguments = parseArguments(toolCall);
-            log.debug("Executing MCP tool {} (stream) with arguments: {}", mcpToolName, arguments);
+            log.debug("Executing MCP tool {} (stream) with arguments: {}", toolName, arguments);
 
             // 验证参数
             if (!validateParameters(arguments)) {
                 return Flux.just(MCPToolResponse.error(toolCall.getId(), "Invalid parameters"));
             }
 
-            log.debug("MCPTool directOutput={}, calling MCP tool  with args: {}", mcpToolName, arguments);
+            log.debug("MCPTool calling MCP tool {} with args: {}", toolName, arguments);
 
             // 1. 先输出判定片段
             MCPToolResponse judge = MCPToolResponse.createDecisionFragment(toolCall.getId());
 
             // 2. 再输出实际内容 - 调用MCP工具的流式方法
             Flux<MCPToolResponse> contentFlux = callMCPToolStream(toolCall.getId(), arguments)
-                .doOnNext(response -> log.debug("MCP tool {} response: {}", mcpToolName, response.getContent()))
+                .doOnNext(response -> log.debug("MCP tool {} response: {}", toolName, response.getContent()))
                 .onErrorMap(this::mapToAgentException)
                 .onErrorReturn(MCPToolResponse.error(toolCall.getId(), "MCP stream call failed"));
 
@@ -234,8 +258,20 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     private Flux<MCPToolResponse> callMCPToolStream(String toolCallId, Map<String, Object> args) {
         return Flux.<MCPToolResponse>create(sink -> {
             try {
+                // 从参数中提取工具名称和参数
+                String actualToolName = (String) args.get("tool_name");
+                Map<String, Object> actualArgs = parseArgumentsParameter(args.get("arguments"));
+
+                if (actualToolName == null) {
+                    sink.error(new IllegalArgumentException("tool_name parameter is required for MCP tool call"));
+                    return;
+                }
+                if (actualArgs == null) {
+                    actualArgs = new HashMap<>();
+                }
+
                 // MCP目前不支持流式调用，使用普通调用并模拟流式输出
-                McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(mcpToolName, args);
+                McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(actualToolName, actualArgs);
                 McpSchema.CallToolResult result = mcpClient.callTool(request);
                 if (Boolean.TRUE.equals(result.isError())) {
                     sink.next(MCPToolResponse.error(toolCallId, extractErrorMessage(result)));
@@ -309,17 +345,43 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
     }
 
     /**
+     * 解析arguments参数，支持字符串和Map两种格式
+     */
+    private Map<String, Object> parseArgumentsParameter(Object argumentsObj) {
+        if (argumentsObj == null) {
+            return new HashMap<>();
+        }
+
+        if (argumentsObj instanceof Map) {
+            // 如果已经是Map，直接返回
+            return (Map<String, Object>) argumentsObj;
+        }
+
+        if (argumentsObj instanceof String) {
+            // 如果是字符串，尝试解析为JSON
+            String argumentsStr = (String) argumentsObj;
+            if (argumentsStr.trim().isEmpty()) {
+                return new HashMap<>();
+            }
+
+            try {
+                return objectMapper.readValue(argumentsStr, Map.class);
+            } catch (Exception e) {
+                log.warn("Failed to parse arguments string as JSON: {}, error: {}", argumentsStr, e.getMessage());
+                // 如果解析失败，返回空Map
+                return new HashMap<>();
+            }
+        }
+
+        log.warn("Unsupported arguments type: {}, returning empty map", argumentsObj.getClass());
+        return new HashMap<>();
+    }
+
+    /**
      * 获取MCP客户端
      */
     public McpSyncClient getMcpClient() {
         return mcpClient;
-    }
-
-    /**
-     * 获取MCP工具名称
-     */
-    public String getMcpToolName() {
-        return mcpToolName;
     }
 
 }

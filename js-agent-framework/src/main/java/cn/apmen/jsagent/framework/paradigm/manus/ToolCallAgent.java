@@ -1,12 +1,12 @@
-package cn.apmen.jsagent.framework.agent;
+package cn.apmen.jsagent.framework.paradigm.manus;
 
+import cn.apmen.jsagent.framework.paradigm.tool.TerminateTool;
 import cn.apmen.jsagent.framework.core.AgentRequest;
 import cn.apmen.jsagent.framework.core.AgentResponse;
 import cn.apmen.jsagent.framework.exception.AgentException;
 import cn.apmen.jsagent.framework.exception.ErrorCode;
 import cn.apmen.jsagent.framework.openaiunified.OpenAIUnifiedChatClient;
 import cn.apmen.jsagent.framework.openaiunified.model.request.ChatCompletionRequest;
-import cn.apmen.jsagent.framework.openaiunified.model.request.Function;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Tool;
 import cn.apmen.jsagent.framework.openaiunified.model.request.ToolCall;
@@ -16,7 +16,6 @@ import cn.apmen.jsagent.framework.tool.ToolContext;
 import cn.apmen.jsagent.framework.tool.ToolRegistry;
 import cn.apmen.jsagent.framework.tool.ToolResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;

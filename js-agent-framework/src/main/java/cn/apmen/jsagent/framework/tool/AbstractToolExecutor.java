@@ -24,6 +24,7 @@ public abstract class AbstractToolExecutor implements ToolExecutor {
      * @return 解析后的参数Map
      */
     protected Map<String, Object> parseArguments(ToolCall toolCall) {
+
         try {
             if (toolCall.getFunction() == null || toolCall.getFunction().getArguments() == null) {
                 return new HashMap<>();
@@ -34,7 +35,24 @@ public abstract class AbstractToolExecutor implements ToolExecutor {
 
             Map<String, Object> result = new HashMap<>();
             arguments.fields().forEachRemaining(entry -> {
-                result.put(entry.getKey(), entry.getValue().asText());
+                JsonNode value = entry.getValue();
+                if (value.isTextual()) {
+                    result.put(entry.getKey(), value.asText());
+                } else if (value.isNumber()) {
+                    result.put(entry.getKey(), value.asText());
+                } else if (value.isBoolean()) {
+                    result.put(entry.getKey(), value.asBoolean());
+                } else if (value.isObject() || value.isArray()) {
+                    // 对于对象和数组，保持为JsonNode或转换为Map/List
+                    try {
+                        result.put(entry.getKey(), objectMapper.treeToValue(value, Object.class));
+                    } catch (Exception e) {
+                        log.warn("Failed to convert JsonNode to Object for key {}: {}", entry.getKey(), e.getMessage());
+                        result.put(entry.getKey(), value.toString());
+                    }
+                } else {
+                    result.put(entry.getKey(), value.asText());
+                }
             });
 
             return result;

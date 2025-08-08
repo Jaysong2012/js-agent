@@ -61,14 +61,11 @@ public class MCPConfiguration {
         parameters.put("properties", properties);
         parameters.put("required", new String[]{"path"});
 
-        // 创建MCPTool，设置directOutput=true，直接输出给用户
+        // 创建MCPTool，使用多工具模式
         return new MCPTool(
-            "read_file",
-            "读取指定路径的文件内容，直接返回给用户",
-            parameters,
-            new String[]{"path"},
             fileSystemMCPClient,
-            "read_file"
+            "read_file",
+            "读取指定路径的文件内容，直接返回给用户"
         );
     }
 
@@ -97,14 +94,11 @@ public class MCPConfiguration {
         parameters.put("properties", properties);
         parameters.put("required", new String[]{"path", "content"});
 
-        // 创建MCPTool，设置directOutput=false，返回给主Agent
+        // 创建MCPTool，使用多工具模式
         return new MCPTool(
-            "write_file",
-            "将内容写入到指定路径的文件",
-            parameters,
-            new String[]{"path", "content"},
             fileSystemMCPClient,
-            "write_file"
+            "write_file",
+            "将内容写入到指定路径的文件"
         );
     }
 
@@ -142,12 +136,9 @@ public class MCPConfiguration {
 
         // 创建MCPTool，设置directOutput=true，直接输出给用户
         return new MCPTool(
+                databaseMCPClient,
             "query_database",
-            "执行SQL查询并返回结果",
-            parameters,
-            new String[]{"sql"},
-            databaseMCPClient,
-            "query_database"
+            "执行SQL查询并返回结果"
         );
     }
 
@@ -201,14 +192,11 @@ public class MCPConfiguration {
         parameters.put("properties", properties);
         parameters.put("required", new String[]{"query", "top_k", "is_fast"});
 
-        // 创建MCPTool，设置directOutput=true，直接输出给用户
+        // 创建MCPTool，使用多工具模式
         return new MCPTool(
-            "bing_search",
-            "Bing网页搜索接口，返回json数据。资源包含网页的url和摘要，不包含完整信息。如果需要完整的信息，is_fast参数应该设置为false。",
-            parameters,
-            new String[]{"query", "top_k", "is_fast"},
             bingSearchMCPClient,
-            "bing_search"
+            "bing_search",
+            "Bing网页搜索接口，返回json数据。资源包含网页的url和摘要，不包含完整信息。如果需要完整的信息，is_fast参数应该设置为false。"
         );
     }
 

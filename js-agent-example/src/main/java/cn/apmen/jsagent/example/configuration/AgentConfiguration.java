@@ -40,11 +40,6 @@ public class AgentConfiguration {
     @Value("${agent.llm.openai.base-url}")
     private String openaiApiBaseUrl;
 
-    @Value("${agent.mcp.bingsearch.url}")
-    private String bingSearchUrl;
-    @Value("${agent.mcp.bingsearch.sse-endpoint}")
-    private String bingSearchSseEndpoint;
-
     /**
      * 配置OpenAI统一客户端
      */
@@ -176,88 +171,6 @@ public class AgentConfiguration {
         );
     }
 
-    /**
-     * 创建Bing搜索MCP客户端
-     */
-    @Bean(name = "bingSearchMCPClient")
-    public McpSyncClient bingSearchMCPClient() {
-        try {
-            log.info("正在初始化Bing搜索MCP客户端...");
-
-            McpSyncClient client = McpClient.sync(
-                            HttpClientSseClientTransport.builder(bingSearchUrl)
-                                    .sseEndpoint(bingSearchSseEndpoint)
-                                    .build())
-                    .requestTimeout(Duration.ofSeconds(60))  // 增加请求超时时间
-                    .initializationTimeout(Duration.ofSeconds(30))  // 增加初始化超时时间
-                    .build();
-
-            client.initialize();
-            log.info("Bing搜索MCP客户端初始化成功");
-
-            // 关闭时销毁资源
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                try {
-                    client.close();
-                    log.info("Bing搜索MCP客户端已关闭");
-                } catch (Exception e) {
-                    log.error("关闭Bing搜索MCP客户端时发生错误", e);
-                }
-            }));
-
-            return client;
-        } catch (Exception e) {
-            log.error("Bing搜索MCP客户端初始化失败", e);
-            throw new RuntimeException("Failed to initialize Bing Search MCP client: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 创建Bing搜索MCPTool - 直接输出给用户
-     */
-    @Bean
-    public MCPTool bingSearchMCPTool(McpSyncClient bingSearchMCPClient) {
-        // 定义参数结构
-        Map<String, Object> parameters = new HashMap<>();
-        parameters.put("type", "object");
-
-        Map<String, Object> properties = new HashMap<>();
-
-        // query参数
-        Map<String, Object> queryParam = new HashMap<>();
-        queryParam.put("type", "string");
-        queryParam.put("description", "搜索输入");
-        properties.put("query", queryParam);
-
-        // top_k参数
-        Map<String, Object> topKParam = new HashMap<>();
-        topKParam.put("type", "integer");
-        topKParam.put("description", "返回的结果数量，最多是10条，默认是3条");
-        topKParam.put("default", 3);
-        topKParam.put("minimum", 1);
-        topKParam.put("maximum", 10);
-        properties.put("top_k", topKParam);
-
-        // is_fast参数
-        Map<String, Object> isFastParam = new HashMap<>();
-        isFastParam.put("type", "boolean");
-        isFastParam.put("description", "是否快速模式。快速模式直接返回摘要，非快速可以获取完整网页内容，默认为true");
-        isFastParam.put("default", true);
-        properties.put("is_fast", isFastParam);
-
-        parameters.put("properties", properties);
-        parameters.put("required", new String[]{"query", "top_k", "is_fast"});
-
-        // 创建MCPTool，设置directOutput=true，直接输出给用户
-        return new MCPTool(
-                "bing_search",
-                "Bing网页搜索接口，返回json数据。资源包含网页的url和摘要，不包含完整信息。如果需要完整的信息，is_fast参数应该设置为false。",
-                parameters,
-                new String[]{"query", "top_k", "is_fast"},
-                bingSearchMCPClient,
-                "bing_search"
-        );
-    }
 
     /**
      * 初始化工具注册

@@ -1,9 +1,9 @@
 package cn.apmen.jsagent.framework.openaiunified;
 
 import cn.apmen.jsagent.framework.openaiunified.model.request.ChatCompletionRequest;
-import cn.apmen.jsagent.framework.openaiunified.model.response.ChatCompletionResponse;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Message;
 import cn.apmen.jsagent.framework.openaiunified.model.request.Tool;
+import cn.apmen.jsagent.framework.openaiunified.model.response.ChatCompletionResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +13,9 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * OpenAI ChatCompletions API客户端
@@ -91,8 +93,40 @@ public class OpenAIUnifiedChatClient {
                 .onErrorResume(throwable -> {
                     log.error("Stream error, attempting to recover: {}", throwable.getMessage());
                     logDetailedError(throwable, request);
-                    return Flux.just("思考失败了，我们聊点别的吧");
+                    // 返回一个有效的JSON格式错误响应，而不是纯文本
+                    String errorResponse = createErrorStreamResponse("思考失败了，我们聊点别的吧");
+                    return Flux.just(errorResponse);
                 });
+    }
+
+    /**
+     * 创建错误的流式响应JSON
+     */
+    private String createErrorStreamResponse(String errorMessage) {
+        try {
+            // 创建一个符合ChatCompletionStreamResponse格式的错误响应
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("id", "error-" + System.currentTimeMillis());
+            errorResponse.put("object", "chat.completion.chunk");
+            errorResponse.put("created", System.currentTimeMillis() / 1000);
+            errorResponse.put("model", "error");
+
+            Map<String, Object> choice = new HashMap<>();
+            choice.put("index", 0);
+            choice.put("finish_reason", "stop");
+
+            Map<String, Object> delta = new HashMap<>();
+            delta.put("content", errorMessage);
+            choice.put("delta", delta);
+
+            errorResponse.put("choices", List.of(choice));
+
+            return objectMapper.writeValueAsString(errorResponse);
+        } catch (Exception e) {
+            log.error("Failed to create error stream response", e);
+            // 如果JSON序列化失败，返回一个最简单的错误响应
+            return "{\"choices\":[{\"delta\":{\"content\":\"" + errorMessage + "\"},\"finish_reason\":\"stop\"}]}";
+        }
     }
 
     /**

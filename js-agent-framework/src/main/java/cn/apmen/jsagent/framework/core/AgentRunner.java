@@ -623,7 +623,7 @@ public class AgentRunner {
                             context.addToolMessage(result.getToolCallId(), content);
 
                             // 先输出TOOL_RESULT事件
-                            AgentResponse toolResultResponse = AgentResponse.toolResult(result);
+                            AgentResponse toolResultEvent = AgentResponse.toolResult(result);
 
                             // 对于 directOutput 的 AgentTool，直接解析并返回内容
                             if (result.isSuccess()) {
@@ -638,7 +638,7 @@ public class AgentRunner {
                                         log.debug("DirectOutput AgentTool content added to context: {}", agentContent);
                                         // 返回TOOL_RESULT事件和TEXT_RESPONSE事件，停止Loop
                                         return Flux.just(
-                                            toolResultResponse,
+                                            toolResultEvent,
                                             AgentResponse.text(agentContent, true)
                                         );
                                     }
@@ -649,7 +649,7 @@ public class AgentRunner {
 
                             log.debug("AgentTool with directOutput=true executed, terminating loop");
                             // 只返回TOOL_RESULT事件
-                            return Flux.just(toolResultResponse);
+                            return Flux.just(toolResultEvent);
                         });
             }
         }
@@ -669,16 +669,21 @@ public class AgentRunner {
         return Flux.merge(toolExecutions)
                 .collectList()
                 .flatMapMany(results -> {
-                    // 先为每个工具结果生成TOOL_RESULT事件
-                    List<AgentResponse> toolResultResponses = new ArrayList<>();
-                    boolean hasSuccessfulToolCall = false;
+                    // 创建TOOL_RESULT事件列表
+                    List<AgentResponse> toolResultEvents = new ArrayList<>();
 
-                    for (ToolResult result : results) {
+                    // 将所有工具结果成对添加到Message，并创建TOOL_RESULT事件
+                    boolean hasSuccessfulToolCall = false;
+                    for (int i = 0; i < results.size(); i++) {
+                        ToolResult result = results.get(i);
+                        ToolCall toolCall = toolCalls.get(i);
+
                         String content = result.isSuccess() ? result.getContent() : result.getError();
                         context.addToolMessage(result.getToolCallId(), content);
 
-                        // 生成TOOL_RESULT事件
-                        toolResultResponses.add(AgentResponse.toolResult(result));
+                        // 创建TOOL_RESULT事件
+                        AgentResponse toolResultEvent = AgentResponse.toolResult(result);
+                        toolResultEvents.add(toolResultEvent);
 
                         // 记录是否有成功的工具调用
                         if (result.isSuccess()) {
@@ -694,9 +699,9 @@ public class AgentRunner {
                         log.warn("All tool calls failed, not incrementing round. Current round: {}", context.getCurrentRound());
                     }
 
-                    // 先输出所有TOOL_RESULT事件，然后继续执行循环
-                    log.debug("All tools executed, outputting {} tool results and continuing loop", toolResultResponses.size());
-                    return Flux.fromIterable(toolResultResponses)
+                    // 先输出所有TOOL_RESULT事件，然后触发CoreAgent的思考并继续Loop
+                    log.debug("All tools executed, outputting {} TOOL_RESULT events and continuing loop", toolResultEvents.size());
+                    return Flux.fromIterable(toolResultEvents)
                             .concatWith(executeStreamLoop(context));
                 });
     }
@@ -728,8 +733,6 @@ public class AgentRunner {
                 return AgentEvent.textResponse(response.getContent(), response.isFinalResponse());
             case TOOL_CALL:
                 return AgentEvent.toolCall(response.getToolCalls());
-            case TOOL_RESULT:
-                return AgentEvent.toolResult(response.getToolResult());
             case ERROR:
                 return AgentEvent.error(response.getError());
             case THINKING:
@@ -748,8 +751,6 @@ public class AgentRunner {
                 return Flux.just(AgentEvent.textResponse(response.getContent(), response.isFinalResponse()));
             case TOOL_CALL:
                 return Flux.just(AgentEvent.toolCall(response.getToolCalls()));
-            case TOOL_RESULT:
-                return Flux.just(AgentEvent.toolResult(response.getToolResult()));
             case ERROR:
                 return Flux.just(AgentEvent.error(response.getError()));
             case THINKING:
@@ -784,7 +785,7 @@ public class AgentRunner {
             case DEBUG:
                 return Flux.just(AgentEvent.debug(response.getContent()));
             default:
-                return Flux.just(AgentEvent.error("Unknown response type"));
+                return Flux.just(AgentEvent.error("Unknown response type: " + response.getType()));
         }
     }
 
