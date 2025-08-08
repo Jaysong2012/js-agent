@@ -1,5 +1,6 @@
 package cn.apmen.jsagent.example.configuration;
 
+import cn.apmen.jsagent.example.tools.CodeExecutorTool;
 import cn.apmen.jsagent.framework.agent.WorkerAgent;
 import cn.apmen.jsagent.framework.conversation.ConversationService;
 import cn.apmen.jsagent.framework.conversation.impl.InMemoryConversationService;
@@ -13,11 +14,6 @@ import cn.apmen.jsagent.framework.memory.MemoryService;
 import cn.apmen.jsagent.framework.openaiunified.OpenAIUnifiedChatClient;
 import cn.apmen.jsagent.framework.tool.AgentTool;
 import cn.apmen.jsagent.framework.tool.ToolRegistry;
-import cn.apmen.jsagent.example.tools.CalculatorTool;
-import cn.apmen.jsagent.example.tools.WeatherTool;
-import io.modelcontextprotocol.client.McpClient;
-import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -177,23 +173,24 @@ public class AgentConfiguration {
      */
     @Bean
     public String initializeTools(ToolRegistry toolRegistry,
-                                 CalculatorTool calculatorTool,
-                                 WeatherTool weatherTool,
-                                 AgentTool mathExpertAgentTool,
-                                 AgentTool writingAssistantAgentTool, MCPTool bingSearchMCPTool) {
+                                 AgentTool mathExpertAgentTool, CodeExecutorTool codeExecutorTool,
+                                 AgentTool writingAssistantAgentTool, MCPTool bingSearchMCPTool,
+                                 MCPTool amapMCPTool, MCPTool datetimeMCPTool, MCPTool weatherMCPTool) {
 
         log.info("开始注册工具到ToolRegistry...");
 
         // 注册基础工具
-        toolRegistry.registerExecutor(calculatorTool);
-        toolRegistry.registerExecutor(weatherTool);
+        toolRegistry.registerExecutor(codeExecutorTool);
+
+        // 注册MCP工具
+        toolRegistry.registerExecutor(bingSearchMCPTool);
+        toolRegistry.registerExecutor(amapMCPTool);
+        toolRegistry.registerExecutor(datetimeMCPTool);
+        toolRegistry.registerExecutor(weatherMCPTool);
 
         // 注册Agent工具
         toolRegistry.registerExecutor(mathExpertAgentTool);
         toolRegistry.registerExecutor(writingAssistantAgentTool);
-
-        // 注册MCP工具
-        toolRegistry.registerExecutor(bingSearchMCPTool);
 
         log.info("工具注册完成，共注册 {} 个工具", toolRegistry.getToolCount());
 

@@ -31,10 +31,12 @@ public class AgentEvent {
      */
     private List<ToolCall> toolCalls;
 
+    private ToolCall callTool;
+
     /**
      * 工具结果列表（当type为TOOL_RESULT时）
      */
-    private List<ToolResult> toolResults;
+    private ToolResult toolResult;
 
     /**
      * 是否为最终事件
@@ -101,18 +103,11 @@ public class AgentEvent {
                 .build();
     }
 
-    public static AgentEvent toolResult(List<ToolResult> toolResults) {
+    public static AgentEvent toolResult(ToolResult toolResult, ToolCall callTool) {
         return AgentEvent.builder()
                 .type(EventType.TOOL_RESULT)
-                .toolResults(toolResults)
-                .isFinal(false)
-                .build();
-    }
-
-    public static AgentEvent toolResult(ToolResult toolResult) {
-        return AgentEvent.builder()
-                .type(EventType.TOOL_RESULT)
-                .toolResults(List.of(toolResult))
+                .toolResult(toolResult)
+                .callTool(callTool)
                 .isFinal(false)
                 .build();
     }

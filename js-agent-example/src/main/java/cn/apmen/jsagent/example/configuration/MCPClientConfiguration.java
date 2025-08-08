@@ -151,8 +151,8 @@ public class MCPClientConfiguration {
             log.info("正在初始化高德地图MCP客户端...");
 
             McpSyncClient client = McpClient.sync(
-                            HttpClientSseClientTransport.builder(amapUrl + amapSseEndpoint)
-                                    //.sseEndpoint(amapSseEndpoint)
+                            HttpClientSseClientTransport.builder(amapUrl)
+                                    .sseEndpoint(amapSseEndpoint)
                                     .build())
                     .requestTimeout(Duration.ofSeconds(60))
                     .initializationTimeout(Duration.ofSeconds(30))

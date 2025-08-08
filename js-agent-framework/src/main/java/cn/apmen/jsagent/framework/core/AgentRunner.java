@@ -623,7 +623,7 @@ public class AgentRunner {
                             context.addToolMessage(result.getToolCallId(), content);
 
                             // 先输出TOOL_RESULT事件
-                            AgentResponse toolResultEvent = AgentResponse.toolResult(result);
+                            AgentResponse toolResultEvent = AgentResponse.toolResult(result, singleToolCall);
 
                             // 对于 directOutput 的 AgentTool，直接解析并返回内容
                             if (result.isSuccess()) {
@@ -682,7 +682,7 @@ public class AgentRunner {
                         context.addToolMessage(result.getToolCallId(), content);
 
                         // 创建TOOL_RESULT事件
-                        AgentResponse toolResultEvent = AgentResponse.toolResult(result);
+                        AgentResponse toolResultEvent = AgentResponse.toolResult(result, toolCall);
                         toolResultEvents.add(toolResultEvent);
 
                         // 记录是否有成功的工具调用
@@ -733,6 +733,8 @@ public class AgentRunner {
                 return AgentEvent.textResponse(response.getContent(), response.isFinalResponse());
             case TOOL_CALL:
                 return AgentEvent.toolCall(response.getToolCalls());
+            case TOOL_RESULT:
+                return AgentEvent.toolResult(response.getToolResult(), response.getCallTool());
             case ERROR:
                 return AgentEvent.error(response.getError());
             case THINKING:
@@ -777,7 +779,7 @@ public class AgentRunner {
             case TOOL_CALL:
                 return Flux.just(AgentEvent.toolCall(response.getToolCalls()));
             case TOOL_RESULT:
-                return Flux.just(AgentEvent.toolResult(response.getToolResult()));
+                return Flux.just(AgentEvent.toolResult(response.getToolResult(), response.getCallTool()));
             case ERROR:
                 return Flux.just(AgentEvent.error(response.getError()));
             case THINKING:

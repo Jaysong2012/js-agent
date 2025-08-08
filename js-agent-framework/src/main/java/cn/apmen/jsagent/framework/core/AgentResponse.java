@@ -35,6 +35,8 @@ public class AgentResponse {
      */
     private ToolResult toolResult;
 
+    private ToolCall callTool;
+
     /**
      * 是否为最终响应
      */
@@ -74,9 +76,10 @@ public class AgentResponse {
                 .build();
     }
 
-    public static AgentResponse toolResult(ToolResult toolResult) {
+    public static AgentResponse toolResult(ToolResult toolResult, ToolCall callTool) {
         return AgentResponse.builder()
                 .type(ResponseType.TOOL_RESULT)
+                .callTool(callTool)
                 .toolResult(toolResult)
                 .isFinalResponse(false)
                 .build();

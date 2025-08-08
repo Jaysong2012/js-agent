@@ -105,7 +105,7 @@ public class CommonToolConfiguration {
             日期时间工具集合，支持以下工具：
 
             1. datetime_current_time - 获取当前时间
-               参数: {timezone: "时区(可选)", format: "时间格式(可选)"}
+               参数: {timezone: "时区(可选)", format: "时间格式(可选, 如 'yyyy-MM-dd HH:mm:ss', 'iso', 'timestamp')"}
 
             2. datetime_time_difference - 计算时间差
                参数: {start_time: "起始时间(可选)", end_time: "结束时间", unit: "单位(可选)", timezone: "时区(可选)", format: "时间格式(可选)"}

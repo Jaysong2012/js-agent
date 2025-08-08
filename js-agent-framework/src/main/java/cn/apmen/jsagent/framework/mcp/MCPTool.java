@@ -163,10 +163,9 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
                 McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(actualToolName, actualArgs);
                 log.debug("构建MCP请求: {}", request);
 
-                // 调用MCP工具
+                // 调用MCP工具（带重试机制）
                 log.info("正在调用MCP工具: {}", actualToolName);
-                McpSchema.CallToolResult result = mcpClient.callTool(request);
-                log.info("MCP工具调用完成: {}, 结果: {}", actualToolName, result != null ? "成功" : "失败");
+                McpSchema.CallToolResult result = callMCPToolWithRetry(request, actualToolName, 3);
 
                 // 检查是否有错误
                 if (Boolean.TRUE.equals(result.isError())) {
@@ -212,7 +211,8 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
         })
         .onErrorResume(error -> {
             log.error("MCP工具调用最终失败: {}, 返回错误结果", toolName);
-            return Mono.just(ToolResult.error(toolCallId, "MCP tool call failed: " + error.getMessage()));
+            String friendlyErrorMessage = createFriendlyErrorMessage(toolName, error);
+            return Mono.just(ToolResult.error(toolCallId, friendlyErrorMessage));
         });
     }
 
@@ -272,7 +272,7 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
 
                 // MCP目前不支持流式调用，使用普通调用并模拟流式输出
                 McpSchema.CallToolRequest request = new McpSchema.CallToolRequest(actualToolName, actualArgs);
-                McpSchema.CallToolResult result = mcpClient.callTool(request);
+                McpSchema.CallToolResult result = callMCPToolWithRetry(request, actualToolName, 3);
                 if (Boolean.TRUE.equals(result.isError())) {
                     sink.next(MCPToolResponse.error(toolCallId, extractErrorMessage(result)));
                 } else {
@@ -375,6 +375,108 @@ public class MCPTool extends AbstractToolExecutor implements StreamingToolExecut
 
         log.warn("Unsupported arguments type: {}, returning empty map", argumentsObj.getClass());
         return new HashMap<>();
+    }
+
+    /**
+     * 带重试机制的MCP工具调用
+     */
+    private McpSchema.CallToolResult callMCPToolWithRetry(McpSchema.CallToolRequest request, String toolName, int maxRetries) {
+        Exception lastException = null;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                log.debug("MCP工具调用尝试 {}/{}: {}", attempt, maxRetries, toolName);
+                McpSchema.CallToolResult result = mcpClient.callTool(request);
+                log.info("MCP工具调用成功: {}, 尝试次数: {}", toolName, attempt);
+                return result;
+
+            } catch (Exception e) {
+                lastException = e;
+                log.warn("MCP工具调用失败 (尝试 {}/{}): {}, 错误类型: {}, 错误详情: {}",
+                    attempt, maxRetries, toolName, e.getClass().getSimpleName(), e.getMessage());
+
+                // 打印更详细的错误信息用于诊断
+                if (e.getCause() != null) {
+                    log.debug("MCP错误根因: {}", e.getCause().getMessage());
+                }
+
+                // 检查是否是连接相关的错误
+                if (isConnectionError(e)) {
+                    if (attempt < maxRetries) {
+                        // 等待一段时间后重试
+                        long waitTime = attempt * 1000L; // 递增等待时间：1s, 2s, 3s...
+                        log.info("检测到连接错误，等待 {}ms 后重试...", waitTime);
+                        try {
+                            Thread.sleep(waitTime);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            throw new AgentException(ErrorCode.TOOL_EXECUTION_FAILED,
+                                "MCP工具调用被中断: " + toolName, ie);
+                        }
+                    } else {
+                        log.error("MCP连接错误，已达到最大重试次数: {}/{}", attempt, maxRetries);
+                    }
+                } else {
+                    // 非连接错误，直接抛出异常，不重试
+                    log.error("MCP工具调用遇到非连接错误，不进行重试: {}", e.getMessage());
+                    break;
+                }
+            }
+        }
+
+        // 所有重试都失败了
+        String errorMessage = lastException != null ? lastException.getMessage() : "Unknown error";
+        if (isConnectionError(lastException)) {
+            throw new AgentException(ErrorCode.TOOL_EXECUTION_FAILED,
+                String.format("MCP服务连接失败，已重试%d次: %s", maxRetries, errorMessage), lastException);
+        } else if (errorMessage.contains("400")) {
+            throw new AgentException(ErrorCode.TOOL_EXECUTION_FAILED,
+                "MCP工具请求格式错误或参数无效: " + errorMessage, lastException);
+        } else {
+            throw new AgentException(ErrorCode.TOOL_EXECUTION_FAILED,
+                String.format("MCP工具调用失败，已重试%d次: %s", maxRetries, errorMessage), lastException);
+        }
+    }
+
+    /**
+     * 创建用户友好的错误消息
+     */
+    private String createFriendlyErrorMessage(String toolName, Throwable error) {
+        if (error instanceof AgentException) {
+            // 通用错误消息
+            return String.format("%s服务暂时不可用，请稍后重试。", toolName);
+        }
+
+        // 非AgentException的通用处理
+        return String.format("%s服务出现技术问题，请稍后重试。", toolName);
+    }
+
+    /**
+     * 检查是否是连接相关的错误
+     */
+    private boolean isConnectionError(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+
+        String errorMessage = error.getMessage();
+        if (errorMessage == null) {
+            errorMessage = "";
+        }
+
+        // 检查常见的连接错误模式
+        return errorMessage.contains("Connection refused") ||
+               errorMessage.contains("Connection reset") ||
+               errorMessage.contains("Connection timed out") ||
+               errorMessage.contains("No route to host") ||
+               errorMessage.contains("Network is unreachable") ||
+               errorMessage.contains("400") ||  // HTTP 400 错误
+               errorMessage.contains("500") ||  // HTTP 500 错误
+               errorMessage.contains("502") ||  // HTTP 502 错误
+               errorMessage.contains("503") ||  // HTTP 503 错误
+               error instanceof java.net.ConnectException ||
+               error instanceof java.net.SocketTimeoutException ||
+               error instanceof java.io.IOException;
     }
 
     /**
